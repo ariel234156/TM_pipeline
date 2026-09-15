@@ -1,0 +1,137 @@
+# Copy this file (e.g. `cp pipeline_config.example.yaml pipeline_config.yaml`)
+# and edit paths/parameters for your dataset. Every value here is a CLI flag
+# passed straight through to AreTomo3 or isonet.py -- run_pipeline.py does
+# not hardcode any of it. Run `python3 run_pipeline.py --config
+# pipeline_config.yaml --dry-run` first to print every command without
+# executing anything, and check it against `AreTomo3 --help` / `isonet.py
+# <subcommand> --help` on your install before a real run.
+
+aretomo_bin: AreTomo3      # path to the AreTomo3 binary, if not on PATH
+# isonet.py -- pip-installed editable from the non-beta /home/isonet2/IsoNet2
+# checkout into the isonet2_environment conda env. The shell that launches
+# run_pipeline.py must have `conda activate isonet2_environment` active.
+isonet_bin: isonet.py
+
+# ---------------------------------------------------------------------------
+# Stage 1: AreTomo3 -- motion correction, CTF, alignment, WBP reconstruction.
+# Keys map to AreTomo3 flags via aretomo_step.FLAG_MAP. Values mirror
+# command.sh in this folder (the current AreTomo3 command for this dataset).
+# ---------------------------------------------------------------------------
+aretomo:
+  in_prefix: /mnt/cryonas02/Users/Gabriel_Frank/Ariel_Cohen/test_ferr/frames/
+  in_suffix: .mdoc
+  in_skips: override
+  out_dir: /mnt/cryonas02/Users/Gabriel_Frank/Ariel_Cohen/test_ferr/aretomo3_out_bin8
+  tmp_dir: /mnt/cryonas02/Users/Gabriel_Frank/Ariel_Cohen/test_ferr/aretomo3_out_bin8
+  log_dir: /mnt/cryonas02/Users/Gabriel_Frank/Ariel_Cohen/test_ferr/aretomo3_out_bin8
+  gain: /mnt/cryonas02/Users/Gabriel_Frank/Ariel_Cohen/test_ferr/20240826_170013_EER_GainReference.gain
+  pix_size: 1.51
+  kv: 200
+  cs: 2.70
+  fm_dose: 0
+  eer_sampling: 1
+  fm_int: 0
+  mc_patch: [3, 3]
+  tilt_axis: [0, 1]
+  tilt_cor: 1
+  at_patch: [4, 4]
+  vol_z: 2096
+  at_bin: [8, 8]          # first value is the "primary" bin used below
+  wbp: 1
+  corr_ctf: 1
+  out_imod: 3
+  split_sum: 1
+  resume: 1
+  gpu: [0, 1, 2, 3]
+  # extra:                # pass-through for any AreTomo3 flag not listed
+  #   "-OutXF": 1          # above, using the flag's exact spelling
+
+# ---------------------------------------------------------------------------
+# Stage 2: organize AreTomo3's EVN/ODD volumes into the layout isonet2's
+# prepare_star expects (this calls organize_for_isonet2.py's own functions,
+# not a reimplementation of them).
+# ---------------------------------------------------------------------------
+organize:
+  out_dir: /mnt/cryonas02/Users/Gabriel_Frank/Ariel_Cohen/test_ferr/isonet2_input
+  # pixel_size: 12.08                 # set directly, OR derive from:
+  raw_pixel_size: 1.51                # aretomo.pix_size
+  bin_factor: 8                       # aretomo.at_bin[0] (the primary bin)
+  defocus_source: ctf                 # ctf | none -- see organize_for_isonet2.py
+  copy: false                         # false = symlink (needs local/POSIX fs)
+
+# ---------------------------------------------------------------------------
+# Stage 3+: isonet2. Every key under each subcommand is forwarded verbatim
+# as `--key value` (see isonet2_steps.py) -- add/remove any documented
+# IsoNet2 parameter here without touching code. Tables:
+# https://github.com/IsoNet-cryoET/IsoNet2
+# ---------------------------------------------------------------------------
+isonet:
+  prepare_star:
+    star_name: tomograms.star
+    voltage: 300
+    ac: 0.1
+    tilt_min: -60
+    tilt_max: 60
+    # number_subtomos: 3000          # default: auto (3000 total / n tomograms)
+    # cs, defocus, pixel_size, even, odd are wired in automatically from the
+    # aretomo/organize stages above -- do not set them here.
+
+  deconv:
+    # This pipeline's organize/prepare_star stages only ever produce EVN/ODD
+    # half-tomograms (no full tomogram), so rlnTomoName stays None and
+    # deconv's default --input_column rlnTomoName would crash trying to
+    # open "None". It also wouldn't help even if repointed at the halves:
+    # refine's isonet2-n2n training path reads
+    # rlnTomoReconstructedTomogramHalf1/2 directly and ignores
+    # rlnDeconvTomoName entirely (see IsoNet/models/data_sequence.py
+    # _load_statistics_and_mask) -- deconv only matters for the
+    # single-full-tomogram "isonet2" method, which this pipeline doesn't
+    # currently produce input for. Leave disabled unless you add a "full"
+    # tomogram path to the organize stage and use method: isonet2.
+    enabled: false
+    deconvstrength: 1.0
+    snrfalloff: 1.0
+    highpassnyquist: 0.02
+    phaseflipped: false
+    ncpus: 4
+    output_dir: deconv
+
+  make_mask:
+    density_percentage: 50
+    std_percentage: 50
+    patch_size: 4
+    z_crop: 0.2
+    output_dir: mask
+
+  refine:
+    # GOTCHA: IsoNet2's own training loop is `for step in range(save_interval,
+    # epochs+1, save_interval)`. If epochs < save_interval that range is
+    # EMPTY, so it silently trains zero epochs, exits 0, and writes no
+    # checkpoint -- no error, no warning. Keep epochs >= save_interval
+    # (ideally a multiple of it) or you'll get a clean "success" that did
+    # nothing.
+    method: isonet2-n2n    # we have even/odd volumes -> noise2noise training
+    arch: unet-medium      # unet-small | unet-medium | unet-large | scunet-fast
+    cube_size: 96           # multiple of 16, >= 64
+    epochs: 50
+    learning_rate: 3e-4
+    loss_func: L2
+    CTF_mode: null          # None | phase_only | wiener | network
+    bfactor: 0               # 200-300 for isolated particles, 0 for cellular
+    mw_weight: -1             # -1 disables; try 20-200 to weight missing wedge
+    noise_level: 0
+    mixed_precision: true
+    gpuID: "0,1,2,3"
+    ncpus: 16
+    save_interval: 10
+    output_dir: isonet_maps
+    # pretrained_model: /path/to/model.pt   # to continue training
+
+  predict:
+    # model: /path/to/isonet_maps/model.pt  # optional -- if omitted,
+    # run_pipeline.py picks the newest *.pt file in refine's output_dir
+    apply_mw_x1: true
+    isCTFflipped: false
+    padding_factor: 1.5
+    gpuID: "0,1,2,3"
+    output_dir: corrected_tomos

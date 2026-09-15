@@ -1,0 +1,192 @@
+#!/usr/bin/env python3
+"""
+End-to-end cryo-ET pipeline: raw tilt series -> AreTomo3 align+reconstruct ->
+organize_for_isonet2 even/odd layout -> IsoNet2 prepare_star/deconv/
+make_mask/refine/predict denoising.
+
+Usage:
+    python3 run_pipeline.py --config pipeline_config.yaml
+    python3 run_pipeline.py --config pipeline_config.yaml --dry-run
+    python3 run_pipeline.py --config pipeline_config.yaml --start-from refine
+    python3 run_pipeline.py --config pipeline_config.yaml --stop-after deconv
+
+Every tunable AreTomo3 and IsoNet2 parameter lives in the YAML config (copy
+pipeline_config.example.yaml and edit it) -- this script only decides what
+order stages run in and wires each stage's output into the next stage's
+input. It calls the AreTomo3 binary and the isonet2 project's isonet.py CLI;
+both must be on PATH (or point at them with --aretomo-bin / config
+"isonet_bin" / "aretomo_bin").
+
+Requires PyYAML (`pip install pyyaml`).
+"""
+import argparse
+import sys
+from pathlib import Path
+
+import yaml
+
+import aretomo_step
+import isonet2_steps
+import organize_for_isonet2 as prep
+
+STAGES = ["aretomo", "organize", "prepare_star", "deconv", "make_mask", "refine", "predict"]
+
+
+def run_organize(cfg: dict, aretomo_out_dir: Path, dry_run: bool):
+    """In-process equivalent of organize_for_isonet2.py's main(): reuses the
+    same find_candidates/check_pair/parse_ctf_defocus_near_zero/link_or_copy
+    functions so behavior stays identical, but returns the EVN/ODD dirs,
+    pixel size and defocus list as Python objects for the next stage
+    instead of just printing the follow-up command."""
+    in_dir = Path(aretomo_out_dir)
+    out_dir = Path(cfg["out_dir"])
+    evn_dir = out_dir / "EVN"
+    odd_dir = out_dir / "ODD"
+
+    pixel_size = cfg.get("pixel_size")
+    if pixel_size is None:
+        raw = cfg.get("raw_pixel_size")
+        binf = cfg.get("bin_factor")
+        if raw is None or binf is None:
+            raise ValueError(
+                "organize config needs pixel_size, or both raw_pixel_size and bin_factor")
+        pixel_size = raw * binf
+
+    if dry_run:
+        print(f"+ [dry-run] would organize {in_dir} -> {evn_dir}, {odd_dir}")
+        return evn_dir, odd_dir, pixel_size, []
+
+    evn_dir.mkdir(parents=True, exist_ok=True)
+    odd_dir.mkdir(parents=True, exist_ok=True)
+
+    log = []
+    included = []  # (base, defocus), same order as evn_dir file creation
+    defocus_source = cfg.get("defocus_source", "ctf")
+    copy = cfg.get("copy", False)
+
+    for base, evn, odd, full in prep.find_candidates(in_dir):
+        if not prep.check_pair(base, evn, odd, full, log):
+            continue
+        defocus = None
+        if defocus_source == "ctf":
+            defocus = prep.parse_ctf_defocus_near_zero(
+                in_dir / f"{base}_CTF.txt", in_dir / f"{base}_TLT.txt", log, base)
+        evn_dst = evn_dir / f"{base}_EVN.mrc"
+        odd_dst = odd_dir / f"{base}_ODD.mrc"
+        prep.link_or_copy(evn, evn_dst, copy)
+        prep.link_or_copy(odd, odd_dst, copy)
+        included.append((base, defocus))
+
+    for base, status, detail in log:
+        print(f"  [{status}] {base}: {detail}")
+    if not included:
+        raise RuntimeError(
+            "organize step found nothing to hand to isonet2 -- check the AreTomo3 output dir")
+
+    defocus_list = [d if d is not None else 0 for _, d in included]
+    if any(d is None for _, d in included):
+        print("WARNING: some tilt series had no usable defocus, filled with 0 -- "
+              "see [WARN]/[SKIP] lines above", file=sys.stderr)
+
+    print(f"organize: {len(included)} tilt series -> {evn_dir}, {odd_dir}")
+    return evn_dir, odd_dir, pixel_size, defocus_list
+
+
+def main():
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--config", required=True, type=Path)
+    ap.add_argument("--start-from", choices=STAGES, default=STAGES[0])
+    ap.add_argument("--stop-after", choices=STAGES, default=STAGES[-1])
+    ap.add_argument("--dry-run", action="store_true",
+                     help="print every command that would run, without running it")
+    args = ap.parse_args()
+
+    cfg = yaml.safe_load(args.config.read_text())
+    start_idx = STAGES.index(args.start_from)
+    stop_idx = STAGES.index(args.stop_after)
+    if start_idx > stop_idx:
+        ap.error("--start-from must come before or equal to --stop-after")
+
+    def active(stage):
+        return start_idx <= STAGES.index(stage) <= stop_idx
+
+    organize_cfg = cfg.get("organize", {})
+    isonet_cfg = cfg.get("isonet", {})
+    isonet_bin = cfg.get("isonet_bin", "isonet.py")
+    aretomo_bin = cfg.get("aretomo_bin", "AreTomo3")
+
+    aretomo_out_dir = Path(cfg["aretomo"]["out_dir"])
+    evn_dir = odd_dir = None
+    pixel_size = None
+    defocus_list = None
+
+    star_name = isonet_cfg.get("prepare_star", {}).get("star_name", "tomograms.star")
+    star_file = Path(organize_cfg.get("out_dir", ".")) / star_name
+
+    if active("aretomo"):
+        aretomo_out_dir = aretomo_step.run_aretomo3(
+            cfg["aretomo"], binary=aretomo_bin, dry_run=args.dry_run)
+
+    if active("organize"):
+        evn_dir, odd_dir, pixel_size, defocus_list = run_organize(
+            organize_cfg, aretomo_out_dir, args.dry_run)
+
+    if active("prepare_star"):
+        ps_cfg = dict(isonet_cfg.get("prepare_star", {}))
+        if evn_dir is None or odd_dir is None or pixel_size is None:
+            raise RuntimeError(
+                "prepare_star needs the organize stage's output -- run with "
+                "--start-from organize (or earlier), it can't be skipped on its own")
+        # isonet.py writes --star_name wherever it resolves (cwd if it's a
+        # bare filename) -- pass an absolute path so it lands in organize's
+        # out_dir, matching where every later stage expects to find it.
+        star_file = Path(organize_cfg["out_dir"]) / ps_cfg.get("star_name", star_name)
+        ps_cfg["star_name"] = str(star_file)
+        isonet2_steps.prepare_star(
+            evn_dir, odd_dir, pixel_size,
+            "[" + ",".join(str(d) for d in defocus_list) + "]",
+            isonet_bin=isonet_bin, dry_run=args.dry_run, **ps_cfg)
+
+    if active("deconv"):
+        dc_cfg = dict(isonet_cfg.get("deconv", {}))
+        if dc_cfg.pop("enabled", True):
+            isonet2_steps.deconv(star_file, isonet_bin=isonet_bin, dry_run=args.dry_run, **dc_cfg)
+
+    if active("make_mask"):
+        mm_cfg = dict(isonet_cfg.get("make_mask", {}))
+        isonet2_steps.make_mask(star_file, isonet_bin=isonet_bin, dry_run=args.dry_run, **mm_cfg)
+
+    refine_out_dir = None
+    if active("refine"):
+        rf_cfg = dict(isonet_cfg.get("refine", {}))
+        refine_out_dir = isonet2_steps.refine(
+            star_file, isonet_bin=isonet_bin, dry_run=args.dry_run, **rf_cfg)
+
+    if active("predict"):
+        pr_cfg = dict(isonet_cfg.get("predict", {}))
+        model = pr_cfg.pop("model", None)
+        if model is None:
+            search_dir = refine_out_dir or Path(
+                isonet_cfg.get("refine", {}).get("output_dir", "isonet_maps"))
+            candidates = (sorted(search_dir.glob("*.pt"), key=lambda p: p.stat().st_mtime)
+                          if search_dir.exists() else [])
+            if not candidates:
+                if args.dry_run:
+                    model = search_dir / "<model selected after refine runs>"
+                    print(f"predict: [dry-run] no checkpoint yet in {search_dir}, "
+                          f"would pick the most recent *.pt at run time")
+                else:
+                    raise RuntimeError(
+                        f"no isonet.predict.model set in config and no *.pt checkpoint found "
+                        f"in {search_dir} -- set isonet.predict.model explicitly in the YAML")
+            else:
+                model = candidates[-1]
+                print(f"predict: no model set in config, using most recent checkpoint: {model}")
+        isonet2_steps.predict(star_file, model, isonet_bin=isonet_bin, dry_run=args.dry_run, **pr_cfg)
+
+    print("\nPipeline finished.")
+
+
+if __name__ == "__main__":
+    main()

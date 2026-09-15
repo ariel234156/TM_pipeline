@@ -1,0 +1,14 @@
+# Real, machine-specific config -- copy pipeline_config.example.yaml to
+# make your own; don't commit it, it hardcodes absolute paths.
+pipeline_config.yaml
+
+__pycache__/
+*.pyc
+
+# Default output_dir names from pipeline_config.example.yaml, in case
+# someone runs the pipeline from inside a checkout of this repo.
+isonet2_input/
+deconv/
+mask/
+isonet_maps/
+corrected_tomos/
