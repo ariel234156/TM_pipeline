@@ -37,6 +37,7 @@ FLAG_MAP = {
     "tilt_axis": "-TiltAxis",
     "tilt_cor": "-TiltCor",
     "at_patch": "-AtPatch",
+    "align_z": "-AlignZ",
     "vol_z": "-VolZ",
     "at_bin": "-AtBin",
     "wbp": "-Wbp",

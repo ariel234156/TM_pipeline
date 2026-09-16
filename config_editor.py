@@ -66,6 +66,7 @@ SECTIONS = [
         ("aretomo.tilt_axis", "Tilt axis", "intlist"),
         ("aretomo.tilt_cor", "Tilt offset correction", "int"),
         ("aretomo.at_patch", "AtPatch (x y)", "intlist"),
+        ("aretomo.align_z", "Alignment Z height (specimen thickness, px)", "int"),
         ("aretomo.vol_z", "Volume Z height", "int"),
         ("aretomo.at_bin", "AtBin (primary secondary)", "intlist"),
         ("aretomo.wbp", "WBP reconstruction", "int"),
