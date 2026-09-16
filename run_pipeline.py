@@ -21,6 +21,7 @@ Requires PyYAML (`pip install pyyaml`).
 """
 import argparse
 import sys
+import time
 from pathlib import Path
 
 import yaml
@@ -30,6 +31,22 @@ import isonet2_steps
 import organize_for_isonet2 as prep
 
 STAGES = ["aretomo", "organize", "prepare_star", "deconv", "make_mask", "refine", "predict"]
+
+
+def log_run_params(cfg: dict, config_path: Path) -> Path:
+    """Write a timestamped copy of the resolved config to a .txt file in
+    aretomo.log_dir (falling back to the current directory), so every run
+    leaves a record of exactly which parameters produced its output."""
+    log_dir = cfg.get("aretomo", {}).get("log_dir")
+    target_dir = Path(log_dir) if log_dir else Path(".")
+    target_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    out_path = target_dir / f"pipeline_params_{timestamp}.txt"
+    header = (f"# Pipeline run started {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+              f"# Config source: {config_path.resolve()}\n\n")
+    out_path.write_text(header + config_path.read_text())
+    print(f"Parameters logged to: {out_path}")
+    return out_path
 
 
 def run_organize(cfg: dict, aretomo_out_dir: Path, dry_run: bool):
@@ -103,6 +120,7 @@ def main():
     args = ap.parse_args()
 
     cfg = yaml.safe_load(args.config.read_text())
+    log_run_params(cfg, args.config)
     start_idx = STAGES.index(args.start_from)
     stop_idx = STAGES.index(args.stop_after)
     if start_idx > stop_idx:
