@@ -40,7 +40,11 @@ from urllib.parse import parse_qs
 SECTIONS = [
     ("Binaries", [
         ("aretomo_bin", "AreTomo3 binary", "str"),
-        ("isonet_bin", "isonet.py path/command", "str"),
+        # isonet_bin is deliberately NOT editable here: it can be either a
+        # plain string or a [python_path, script_path] list (see the
+        # comment above it in the YAML), and this editor's "str" kind
+        # would corrupt a list value by quoting its Python repr on save.
+        # Edit it by hand.
     ]),
     ("AreTomo3 -- raw paths", [
         ("aretomo.in_prefix", "Input frames/mdoc dir", "path"),
