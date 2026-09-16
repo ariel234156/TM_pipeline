@@ -41,7 +41,6 @@ aretomo:
   mc_patch: [3, 3]
   tilt_axis: [0, 1]
   tilt_cor: 1
-  at_patch: [4, 4]
   align_z: 256            # Z height of specimen in pixels used during alignment (patch-tracking). AreTomo3 default: 256
   vol_z: 2096
   at_bin: [8, 8]          # first value is the "primary" bin used below
