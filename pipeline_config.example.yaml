@@ -7,9 +7,16 @@
 # <subcommand> --help` on your install before a real run.
 
 aretomo_bin: AreTomo3      # path to the AreTomo3 binary, if not on PATH
-# isonet.py -- pip-installed editable from the non-beta /home/isonet2/IsoNet2
-# checkout into the isonet2_environment conda env. The shell that launches
-# run_pipeline.py must have `conda activate isonet2_environment` active.
+# isonet.py -- a bare command name like this depends on PATH at run time,
+# which depends on the right environment (conda/venv/etc.) being activated
+# in whatever shell launches run_pipeline.py. If more than one isonet.py
+# install exists on the machine (e.g. an old/beta copy left on PATH by a
+# stale dotfile entry), forgetting to activate can silently run the WRONG
+# one and fail with a confusing ModuleNotFoundError for a dependency that
+# "should" be installed. To make this immune to activation/PATH mistakes
+# entirely, set isonet_bin to a [python_path, script_path] pair instead --
+# isonet2_steps.py accepts either form -- e.g.:
+#   isonet_bin: ["/path/to/your/env/bin/python", "/path/to/isonet.py"]
 isonet_bin: isonet.py
 
 # ---------------------------------------------------------------------------

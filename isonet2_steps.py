@@ -44,24 +44,35 @@ def _run(cmd: list, dry_run: bool):
         subprocess.run(cmd, check=True, env=_ISONET_ENV)
 
 
+def _isonet_prefix(isonet_bin) -> list:
+    """isonet_bin can be a plain command/path string (resolved via PATH at
+    run time -- depends on the right conda env being activated first), or
+    a [python_path, script_path] pair that pins the exact interpreter
+    regardless of shell activation state. The latter is what avoids a
+    prepare_star/refine/etc. silently picking up a *different* isonet.py
+    (e.g. a stale one from another install left on PATH) with the wrong
+    dependencies -- see pipeline_config.yaml's isonet_bin comment."""
+    return list(isonet_bin) if isinstance(isonet_bin, (list, tuple)) else [isonet_bin]
+
+
 def prepare_star(even_dir, odd_dir, pixel_size, defocus, isonet_bin="isonet.py",
                   dry_run=False, **flags) -> Path:
-    cmd = [isonet_bin, "prepare_star",
-           "--even", str(even_dir), "--odd", str(odd_dir),
-           "--pixel_size", str(pixel_size), "--defocus", str(defocus)]
+    cmd = _isonet_prefix(isonet_bin) + [
+        "prepare_star", "--even", str(even_dir), "--odd", str(odd_dir),
+        "--pixel_size", str(pixel_size), "--defocus", str(defocus)]
     cmd += _flag_args(flags)
     _run(cmd, dry_run)
     return Path(flags.get("star_name", "tomograms.star"))
 
 
 def deconv(star_file, isonet_bin="isonet.py", dry_run=False, **flags) -> Path:
-    cmd = [isonet_bin, "deconv", str(star_file)] + _flag_args(flags)
+    cmd = _isonet_prefix(isonet_bin) + ["deconv", str(star_file)] + _flag_args(flags)
     _run(cmd, dry_run)
     return Path(flags.get("output_dir", "./deconv"))
 
 
 def make_mask(star_file, isonet_bin="isonet.py", dry_run=False, **flags) -> Path:
-    cmd = [isonet_bin, "make_mask", str(star_file)] + _flag_args(flags)
+    cmd = _isonet_prefix(isonet_bin) + ["make_mask", str(star_file)] + _flag_args(flags)
     _run(cmd, dry_run)
     return Path(flags.get("output_dir", "mask"))
 
@@ -70,18 +81,18 @@ def denoise(star_file, isonet_bin="isonet.py", dry_run=False, **flags) -> Path:
     """Quick noise2noise pass -- useful for a fast preview / mask sanity
     check before committing to a full `refine` run. Not wired into
     run_pipeline.py's default stage order; call it manually or add it."""
-    cmd = [isonet_bin, "denoise", str(star_file)] + _flag_args(flags)
+    cmd = _isonet_prefix(isonet_bin) + ["denoise", str(star_file)] + _flag_args(flags)
     _run(cmd, dry_run)
     return Path(flags.get("output_dir", "denoise"))
 
 
 def refine(star_file, isonet_bin="isonet.py", dry_run=False, **flags) -> Path:
-    cmd = [isonet_bin, "refine", str(star_file)] + _flag_args(flags)
+    cmd = _isonet_prefix(isonet_bin) + ["refine", str(star_file)] + _flag_args(flags)
     _run(cmd, dry_run)
     return Path(flags.get("output_dir", "isonet_maps"))
 
 
 def predict(star_file, model, isonet_bin="isonet.py", dry_run=False, **flags) -> Path:
-    cmd = [isonet_bin, "predict", str(star_file), "--model", str(model)] + _flag_args(flags)
+    cmd = _isonet_prefix(isonet_bin) + ["predict", str(star_file), "--model", str(model)] + _flag_args(flags)
     _run(cmd, dry_run)
     return Path(flags.get("output_dir", "./corrected_tomos"))
