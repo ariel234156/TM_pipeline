@@ -71,6 +71,15 @@ organize:
 # as `--key value` (see isonet2_steps.py) -- add/remove any documented
 # IsoNet2 parameter here without touching code. Tables:
 # https://github.com/IsoNet-cryoET/IsoNet2
+#
+# GOTCHA: each stage's output_dir below is a RELATIVE path by default, and
+# isonet.py always resolves relative paths against whatever directory you
+# happen to launch run_pipeline.py FROM -- not against organize.out_dir or
+# any other path in this file. Launch from a different directory next time
+# (a different terminal session, a different cwd) and your output silently
+# lands somewhere else, not where your dataset lives. Use absolute paths
+# here instead (e.g. pointing into the same folder as organize.out_dir) to
+# make output location independent of where you happen to run the command.
 # ---------------------------------------------------------------------------
 isonet:
   prepare_star:
