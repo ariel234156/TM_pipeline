@@ -35,9 +35,10 @@ aretomo:
   pix_size: 1.51
   kv: 200
   cs: 2.70
+  amp_contrast: 0.07      # AreTomo3 default: 0.07
   fm_dose: 0
   eer_sampling: 1
-  fm_int: 0
+  group: [1, 1]            # frames grouped/summed before alignment tracking: 1st=global alignment, 2nd=patch alignment. [1,1] = no grouping (1 frame per group). AreTomo3 --help doesn't state an explicit default for this flag.
   mc_patch: [3, 3]
   tilt_axis: [0, 1]
   tilt_cor: 1
