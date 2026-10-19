@@ -44,9 +44,10 @@ import aretomo2_step
 import isonet2_steps
 import organize_for_isonet2 as prep
 import pytom_step
+import relion5_star
 
-STAGES = ["aretomo", "organize", "prepare_star", "deconv", "make_mask", "refine", "predict",
-          "tm_template", "tm_mask", "tm_match", "tm_extract", "tm_merge"]
+STAGES = ["aretomo", "relion5_star", "organize", "prepare_star", "deconv", "make_mask",
+          "refine", "predict", "tm_template", "tm_mask", "tm_match", "tm_extract", "tm_merge"]
 
 
 def log_run_params(cfg: dict, config_path: Path) -> Path:
@@ -265,6 +266,31 @@ def main():
         else:
             aretomo_out_dir = aretomo_step.run_aretomo3(
                 cfg["aretomo"], binary=aretomo_bin, dry_run=args.dry_run)
+
+    if active("relion5_star"):
+        # Optional: generate a RELION5-compatible tomograms.star (+ one
+        # tilt_series/<name>.star per tomogram) from AreTomo3's own .mdoc/
+        # _CTF.txt/_TLT.txt output. Only meaningful for aretomo_engine: 3
+        # -- AreTomo2 (engine 2) produces no per-tilt CTF/angle files to
+        # build this from.
+        if aretomo_engine == 2:
+            print("relion5_star: skipped -- not applicable to aretomo_engine: 2 "
+                  "(AreTomo2 produces no per-tilt .mdoc/CTF metadata)")
+        else:
+            r5_cfg = cfg.get("relion5_star", {})
+            r5_out_dir = Path(r5_cfg.get("out_dir", Path(cfg["aretomo"]["out_dir"]) / "relion5"))
+            mdoc_dir = Path(r5_cfg.get("mdoc_dir", cfg["aretomo"]["in_prefix"]))
+            if args.dry_run:
+                print(f"+ [dry-run] would write {r5_out_dir}/tomograms.star "
+                      f"from {aretomo_out_dir} / {mdoc_dir}")
+            else:
+                relion5_star.write_tomograms_star(
+                    {"pix_size": cfg["aretomo"]["pix_size"],
+                     "at_bin": cfg["aretomo"]["at_bin"],
+                     "amp_contrast": cfg["aretomo"].get("amp_contrast", 0.07),
+                     "kv": cfg["aretomo"]["kv"],
+                     "cs": cfg["aretomo"]["cs"]},
+                    aretomo_out_dir, mdoc_dir, r5_out_dir)
 
     if active("organize"):
         if aretomo_engine == 2:

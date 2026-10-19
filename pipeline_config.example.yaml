@@ -100,6 +100,26 @@ aretomo:
 #   #   "-CropVol": 4096 4096
 
 # ---------------------------------------------------------------------------
+# Stage 1b (optional, aretomo_engine: 3 only): generate a RELION5-
+# compatible tomograms.star (+ one tilt_series/<name>.star per tomogram)
+# from AreTomo3's own .mdoc/_CTF.txt/_TLT.txt output (relion5_star.py).
+# Schema verified against PyTom's own RELION5 reader
+# (pytom_tm.io.parse_relion5_star_data) by reading its source directly --
+# NOT validated by actually importing into RELION5's own GUI/pipeliner,
+# which may expect additional columns this doesn't provide.
+#
+# GOTCHA (confirmed empirically): AreTomo3's _TLT.txt/_CTF.txt are sorted
+# by TILT ANGLE, not acquisition order -- dose-symmetric schemes acquire
+# non-monotonically (e.g. 0, 2, -2, -4, 4, ...). Dose accumulation
+# (rlnMicrographPreExposure) is computed from the .mdoc file's own
+# [ZValue] sections instead, which ARE in true acquisition order and each
+# carry their own ExposureDose.
+# ---------------------------------------------------------------------------
+# relion5_star:
+#   out_dir: /path/to/relion5_star_output
+#   # mdoc_dir:               # defaults to aretomo.in_prefix above
+
+# ---------------------------------------------------------------------------
 # Stage 2: organize. With aretomo_engine: 3 (default), symlinks AreTomo3's
 # EVN/ODD volumes into the layout isonet2's prepare_star expects (calls
 # organize_for_isonet2.py's own functions). With aretomo_engine: 2,
@@ -265,4 +285,5 @@ isonet:
 #   extract_candidates:
 #     number_of_particles: 500
 #     # cut_off: 0.5                  # override automatic cutoff estimation
-#   # merged_star_name: all_particles.star
+#     # "relion5-compat": true        # write centered coordinates in Angstrom for RELION5 (real pytom flag, verified)
+#   # merged_star_name: particles.star

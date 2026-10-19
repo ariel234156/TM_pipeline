@@ -7,10 +7,11 @@ YAML config. `run_pipeline.py` only decides what order stages run in and
 wires each stage's output into the next stage's input — every parameter
 lives in the config, not in code.
 
-Pipeline stages: `aretomo` → `organize` → `prepare_star` → `deconv` →
-`make_mask` → `refine` → `predict` → `tm_template` → `tm_mask` →
-`tm_match` → `tm_extract` → `tm_merge` (the last five are optional,
-template matching via PyTom — see below).
+Pipeline stages: `aretomo` → `relion5_star` → `organize` → `prepare_star`
+→ `deconv` → `make_mask` → `refine` → `predict` → `tm_template` →
+`tm_mask` → `tm_match` → `tm_extract` → `tm_merge` (`relion5_star` and
+the five `tm_*` stages are optional — RELION5 export and PyTom template
+matching, see below).
 
 Two AreTomo engines are supported via the `aretomo_engine` config key:
 **3** (default) runs AreTomo3 from raw frames + `.mdoc` files, producing
@@ -84,6 +85,7 @@ background rather than in a session that might get interrupted.
 | `aretomo2_step.py` | Batch-runs AreTomo2 over pre-assembled tilt series MRC stacks (`aretomo_engine: 2`) |
 | `isonet2_steps.py` | Thin wrappers around `isonet.py`'s subcommands |
 | `organize_for_isonet2.py` | Organizes AreTomo3's EVN/ODD volumes into IsoNet2's expected layout |
+| `relion5_star.py` | Generates a RELION5-compatible `tomograms.star` from AreTomo3's own output (optional, `relion5_star` stage) |
 | `pytom_step.py` | Template matching via PyTom's pytom-match-pick toolkit (optional, `tm_*` stages) |
 | `pipeline_config.example.yaml` | Template config — copy to `pipeline_config.yaml` and edit |
 | `config_editor.py` | Local web form for editing the config |
@@ -105,6 +107,14 @@ config explicitly rather than trusting the tomogram's own header — make
 sure that value matches your actual data. You'll see a `WARNING: Provided
 voxel size does not match voxel size annotated in tomogram/template mrc.`
 on every run because of this; that's expected.
+
+For RELION5-compatible output: set `"relion5-compat": true` under
+`pytom.extract_candidates` to get `particles.star` with centered
+coordinates in Angstrom (a real pytom flag). For a matching
+`tomograms.star`, the optional `relion5_star` stage (before `organize`,
+`aretomo_engine: 3` only) generates one from AreTomo3's own `.mdoc`/
+`_CTF.txt`/`_TLT.txt` output — schema verified against PyTom's own
+RELION5 reader, but not validated by an actual RELION5 import.
 
 ## Known gotchas
 

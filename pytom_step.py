@@ -25,11 +25,8 @@ from create_template's actual output box size and the configured
 particle_diameter_angstrom / voxel_size_angstrom, rather than requiring
 the user to precompute and keep them in sync by hand.
 """
-import json
 import subprocess
 from pathlib import Path
-
-import mrcfile
 
 
 def _run(cmd: list, dry_run: bool):
@@ -72,6 +69,7 @@ def create_mask(cfg: dict, template_file: Path, dry_run: bool) -> Path:
     if dry_run and not template_file.exists():
         box_size = cfg.get("_assumed_box_size", 64)
     else:
+        import mrcfile  # only needed here -- keeps pytom_step.py importable without it
         with mrcfile.open(template_file, permissive=True) as f:
             box_size = f.data.shape[0]
     radius_px = (cfg["particle_diameter_angstrom"] / 2.0) / cfg["voxel_size_angstrom"]

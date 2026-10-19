@@ -151,6 +151,9 @@ SECTIONS = [
         ("isonet.predict.gpuID", "GPU IDs", "str"),
         ("isonet.predict.output_dir", "Output dir", "str"),
     ]),
+    ("RELION5 star export (optional, aretomo_engine: 3 only)", [
+        ("relion5_star.out_dir", "Output dir", "path"),
+    ]),
     ("PyTom -- template matching (optional)", [
         ("pytom.bin_dir", "pytom_tm conda env's bin/ dir", "path"),
         ("pytom.reference_map", "Reference density map (MRC)", "path"),
@@ -161,6 +164,7 @@ SECTIONS = [
         ("pytom.create_mask.sigma", "Mask edge drop-off (px)", "float"),
         ("pytom.match_template.tilt_angles", "Tilt angles (min max)", "intlist"),
         ("pytom.extract_candidates.number_of_particles", "Max particles to extract per tomogram", "int"),
+        ("pytom.extract_candidates.relion5-compat", "RELION5-compatible coordinates (particles.star)", "bool"),
     ]),
 ]
 
