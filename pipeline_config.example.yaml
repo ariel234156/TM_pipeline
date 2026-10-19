@@ -37,8 +37,9 @@ aretomo:
   cs: 2.70
   amp_contrast: 0.07      # AreTomo3 default: 0.07
   fm_dose: 0
-  eer_sampling: 1
-  group: [1, 1]            # frames grouped/summed before alignment tracking: 1st=global alignment, 2nd=patch alignment. [1,1] = no grouping (1 frame per group). AreTomo3 --help doesn't state an explicit default for this flag.
+  eer_sampling: 1          # for EER data, the manual recommends EerSampling 2 + McBin 2 together (super-resolution) over EerSampling 1 + McBin 1 -- restores more info at lower tilts
+  mc_bin: 1                # see eer_sampling comment -- pair with EerSampling 2 if you raise it
+  group: [1, 4]            # AreTomo3 manual's documented default: 1st=global alignment grouping, 2nd=patch alignment grouping (larger, since patches have less SNR than full frame)
   mc_patch: [3, 3]
   tilt_axis: [0, 1]
   tilt_cor: 1

@@ -33,6 +33,7 @@ FLAG_MAP = {
     "amp_contrast": "-AmpContrast",
     "fm_dose": "-FmDose",
     "eer_sampling": "-EerSampling",
+    "mc_bin": "-McBin",
     "group": "-Group",
     "mc_patch": "-McPatch",
     "tilt_axis": "-TiltAxis",
