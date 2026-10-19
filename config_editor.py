@@ -39,7 +39,9 @@ from urllib.parse import parse_qs
 #   str, path, int, float, bool, intlist, str_or_null
 SECTIONS = [
     ("Binaries", [
+        ("aretomo_engine", "AreTomo engine (3=AreTomo3 | 2=AreTomo2)", "int"),
         ("aretomo_bin", "AreTomo3 binary", "str"),
+        ("aretomo2_bin", "AreTomo2 binary (only used when engine=2)", "str"),
         # isonet_bin is deliberately NOT editable here: it can be either a
         # plain string or a [python_path, script_path] list (see the
         # comment above it in the YAML), and this editor's "str" kind
@@ -76,6 +78,24 @@ SECTIONS = [
         ("aretomo.split_sum", "Split odd/even sums", "int"),
         ("aretomo.resume", "Resume", "int"),
         ("aretomo.gpu", "GPU IDs", "intlist"),
+    ]),
+    ("AreTomo2 (alternative engine -- only used when aretomo_engine=2)", [
+        ("aretomo2.in_dir", "Input dir (pre-assembled tilt series .mrc)", "path"),
+        ("aretomo2.out_dir", "Output dir", "path"),
+        ("aretomo2.out_suffix", "Output filename suffix", "str"),
+        ("aretomo2.skip_existing", "Skip files whose output already exists", "bool"),
+        ("aretomo2.pix_size", "Pixel size (A)", "float"),
+        ("aretomo2.kv", "Voltage (kV)", "float"),
+        ("aretomo2.cs", "Spherical aberration (mm)", "float"),
+        ("aretomo2.amp_contrast", "Amplitude contrast", "float"),
+        ("aretomo2.tilt_range", "Tilt range (min max)", "intlist"),
+        ("aretomo2.tilt_axis", "Tilt axis (angle, -1=use as-is)", "intlist"),
+        ("aretomo2.align_z", "Alignment Z height (specimen thickness, px)", "int"),
+        ("aretomo2.vol_z", "Volume Z height", "int"),
+        ("aretomo2.out_bin", "Output binning", "float"),
+        ("aretomo2.wbp", "WBP reconstruction", "int"),
+        ("aretomo2.patch", "Local alignment patches (x y)", "intlist"),
+        ("aretomo2.gpu", "GPU IDs", "intlist"),
     ]),
     ("Organize (AreTomo3 -> IsoNet2 layout)", [
         ("organize.out_dir", "Organized EVN/ODD output dir", "path"),
