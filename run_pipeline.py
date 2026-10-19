@@ -20,6 +20,7 @@ both must be on PATH (or point at them with --aretomo-bin / config
 Requires PyYAML (`pip install pyyaml`).
 """
 import argparse
+import csv
 import sys
 import time
 from pathlib import Path
@@ -77,7 +78,7 @@ def run_organize(cfg: dict, aretomo_out_dir: Path, dry_run: bool):
     odd_dir.mkdir(parents=True, exist_ok=True)
 
     log = []
-    included = []  # (base, defocus), same order as evn_dir file creation
+    included = []  # (base, defocus, ctf_score), same order as evn_dir file creation
     defocus_source = cfg.get("defocus_source", "ctf")
     copy = cfg.get("copy", False)
 
@@ -88,11 +89,15 @@ def run_organize(cfg: dict, aretomo_out_dir: Path, dry_run: bool):
         if defocus_source == "ctf":
             defocus = prep.parse_ctf_defocus_near_zero(
                 in_dir / f"{base}_CTF.txt", in_dir / f"{base}_TLT.txt", log, base)
+        # CTF score is collected independent of defocus_source -- it's what
+        # isonet.refine.top_ctf_n (see main()) ranks tomograms by.
+        ctf_score = prep.parse_ctf_score_near_zero(
+            in_dir / f"{base}_CTF.txt", in_dir / f"{base}_TLT.txt", log, base)
         evn_dst = evn_dir / f"{base}_EVN.mrc"
         odd_dst = odd_dir / f"{base}_ODD.mrc"
         prep.link_or_copy(evn, evn_dst, copy)
         prep.link_or_copy(odd, odd_dst, copy)
-        included.append((base, defocus))
+        included.append((base, defocus, ctf_score))
 
     for base, status, detail in log:
         print(f"  [{status}] {base}: {detail}")
@@ -100,13 +105,76 @@ def run_organize(cfg: dict, aretomo_out_dir: Path, dry_run: bool):
         raise RuntimeError(
             "organize step found nothing to hand to isonet2 -- check the AreTomo3 output dir")
 
-    defocus_list = [d if d is not None else 0 for _, d in included]
-    if any(d is None for _, d in included):
+    defocus_list = [d if d is not None else 0 for _, d, _ in included]
+    if any(d is None for _, d, _ in included):
         print("WARNING: some tilt series had no usable defocus, filled with 0 -- "
               "see [WARN]/[SKIP] lines above", file=sys.stderr)
 
+    # Written here (not just returned) so isonet.refine.top_ctf_n can read
+    # it back even on a separate `--start-from refine` invocation that
+    # doesn't re-run organize.
+    scores_path = out_dir / "ctf_scores.csv"
+    with open(scores_path, "w", newline="") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(["index", "basename", "ctf_score"])
+        for i, (base, _defocus, score) in enumerate(included, start=1):
+            writer.writerow([i, base, "" if score is None else score])
+    if any(s is None for _, _, s in included):
+        print("WARNING: some tilt series had no usable CTF score (see [WARN]/[SKIP] lines "
+              "above) -- they're excluded from isonet.refine.top_ctf_n ranking", file=sys.stderr)
+
     print(f"organize: {len(included)} tilt series -> {evn_dir}, {odd_dir}")
+    print(f"organize: CTF scores written to {scores_path} (for isonet.refine.top_ctf_n)")
     return evn_dir, odd_dir, pixel_size, defocus_list
+
+
+def select_top_ctf_indices(organize_out_dir, n: int) -> set:
+    """Read the ctf_scores.csv written by run_organize() and return the
+    1-based rlnIndex values (matching the star file's row numbering) of
+    the top-n tilt series by CTF cross-correlation score."""
+    scores_path = Path(organize_out_dir) / "ctf_scores.csv"
+    if not scores_path.exists():
+        raise RuntimeError(
+            f"isonet.refine.top_ctf_n is set but {scores_path} doesn't exist yet -- "
+            f"run the organize stage at least once first (it's what computes CTF scores "
+            f"per tilt series); re-run with --start-from organize")
+
+    rows = []
+    with open(scores_path, newline="") as fh:
+        for row in csv.DictReader(fh):
+            if row["ctf_score"] == "":
+                continue
+            rows.append((int(row["index"]), float(row["ctf_score"])))
+    if not rows:
+        raise RuntimeError(f"no usable CTF scores found in {scores_path}")
+
+    rows.sort(key=lambda r: r[1], reverse=True)
+    return {idx for idx, _score in rows[:n]}
+
+
+def write_filtered_star(star_file: Path, keep_indices: set, suffix: str) -> Path:
+    """isonet.py's refine has no --tomo_idx flag (unlike deconv/make_mask/
+    predict) -- the only way to restrict which tomograms it trains on is to
+    give it a star file that only contains those rows. Keeps every header/
+    loop_/column-definition line as-is; a line counts as a data row (kept
+    only if its rlnIndex, the first whitespace-separated token, is in
+    keep_indices) if that first token parses as an integer -- true for
+    every real data row and nothing in the header, by construction of the
+    STAR format isonet.py's starfile package writes."""
+    out_lines = []
+    for line in Path(star_file).read_text().splitlines():
+        first_token = line.split(None, 1)[0] if line.split() else None
+        try:
+            idx = int(first_token)
+        except (TypeError, ValueError):
+            out_lines.append(line)  # header/comment/blank line -- keep as-is
+            continue
+        if idx in keep_indices:
+            out_lines.append(line)
+
+    out_path = Path(star_file).with_name(f"{Path(star_file).stem}{suffix}.star")
+    out_path.write_text("\n".join(out_lines) + "\n")
+    return out_path
 
 
 def main():
@@ -178,8 +246,17 @@ def main():
     refine_out_dir = None
     if active("refine"):
         rf_cfg = dict(isonet_cfg.get("refine", {}))
+        top_ctf_n = rf_cfg.pop("top_ctf_n", None)
+        refine_star_file = star_file
+        if top_ctf_n:
+            # refine has no --tomo_idx (unlike deconv/make_mask/predict) --
+            # give it a star file containing only the selected rows instead.
+            keep = select_top_ctf_indices(organize_cfg["out_dir"], int(top_ctf_n))
+            refine_star_file = write_filtered_star(star_file, keep, suffix="_top_ctf")
+            print(f"refine: top_ctf_n={top_ctf_n} -> training on rlnIndex {sorted(keep)} "
+                  f"({refine_star_file})")
         refine_out_dir = isonet2_steps.refine(
-            star_file, isonet_bin=isonet_bin, dry_run=args.dry_run, **rf_cfg)
+            refine_star_file, isonet_bin=isonet_bin, dry_run=args.dry_run, **rf_cfg)
 
     if active("predict"):
         pr_cfg = dict(isonet_cfg.get("predict", {}))

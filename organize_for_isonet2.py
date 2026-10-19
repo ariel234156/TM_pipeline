@@ -77,15 +77,45 @@ def parse_ctf_defocus_near_zero(ctf_path: Path, tlt_path: Path, log, base):
 
     ASSUMES the standard CTFFind4 column layout:
         col1=index  col2=defocus1[A]  col3=defocus2[A]  col4=azimuth ...
-    and that row order matches the companion *_TLT.txt row order.
-    This has NOT been verified against real AreTomo3 output -- use
-    --show-ctf-sample on one tilt series first and eyeball it.
+        col5=phase shift[rad]  col6=cross correlation  col7=fit spacing[A]  col8=dfHand
+    and that row order matches the companion *_TLT.txt row order. Verified
+    2026-09-15 against real AreTomo3 output with --show-ctf-sample -- the
+    column layout is correct.
     """
+    row = _find_near_zero_ctf_row(ctf_path, tlt_path, log, base, "defocus")
+    if row is None:
+        return None
+    d1, d2, _score = row
+    return round((d1 + d2) / 2.0, 1)
+
+
+def parse_ctf_score_near_zero(ctf_path: Path, tlt_path: Path, log, base):
+    """
+    Return the CTF cross-correlation score (column 6 of an AreTomo3
+    *_CTF.txt file -- "cross correlation", the standard CTF fit-quality
+    metric) for the image whose tilt angle is closest to 0 degrees.
+    Higher means a cleaner CTF fit / better-quality data for that tilt
+    series. Shares the same row-matching logic and column-layout
+    assumption as parse_ctf_defocus_near_zero -- see that function's
+    docstring for the caveat about it not being independently verified
+    against AreTomo3's own documentation.
+    """
+    row = _find_near_zero_ctf_row(ctf_path, tlt_path, log, base, "CTF score")
+    if row is None:
+        return None
+    _d1, _d2, score = row
+    return score
+
+
+def _find_near_zero_ctf_row(ctf_path: Path, tlt_path: Path, log, base, what: str):
+    """Shared parsing for parse_ctf_defocus_near_zero/parse_ctf_score_near_zero:
+    returns (defocus1, defocus2, cc_score) for the near-zero-tilt row, or
+    None (logging a WARN) if the files are missing or row counts mismatch."""
     if not ctf_path.exists():
-        log.append((base, "WARN", f"no CTF file, defocus left as None: {ctf_path.name}"))
+        log.append((base, "WARN", f"no CTF file, {what} left as None: {ctf_path.name}"))
         return None
     if not tlt_path.exists():
-        log.append((base, "WARN", f"no TLT file, defocus left as None: {tlt_path.name}"))
+        log.append((base, "WARN", f"no TLT file, {what} left as None: {tlt_path.name}"))
         return None
 
     angles = parse_tlt(tlt_path)
@@ -96,22 +126,21 @@ def parse_ctf_defocus_near_zero(ctf_path: Path, tlt_path: Path, log, base):
             if not line or line.startswith("#"):
                 continue
             parts = line.split()
-            if len(parts) < 3:
+            if len(parts) < 6:
                 continue
             try:
-                rows.append((float(parts[1]), float(parts[2])))
+                rows.append((float(parts[1]), float(parts[2]), float(parts[5])))
             except ValueError:
                 continue
 
     if not rows or len(rows) != len(angles):
         log.append((base, "WARN",
                      f"CTF/TLT row count mismatch ({len(rows)} vs {len(angles)}), "
-                     f"defocus left as None: {ctf_path.name}"))
+                     f"{what} left as None: {ctf_path.name}"))
         return None
 
     idx = min(range(len(angles)), key=lambda i: abs(angles[i]))
-    d1, d2 = rows[idx]
-    return round((d1 + d2) / 2.0, 1)
+    return rows[idx]
 
 
 def show_ctf_sample(in_dir: Path, base: str):
