@@ -1,8 +1,19 @@
 #!/usr/bin/env python3
 """
-End-to-end cryo-ET pipeline: raw tilt series -> AreTomo3 align+reconstruct ->
-organize_for_isonet2 even/odd layout -> IsoNet2 prepare_star/deconv/
-make_mask/refine/predict denoising.
+End-to-end cryo-ET pipeline: raw tilt series -> AreTomo align+reconstruct ->
+organize/prepare_star -> IsoNet2 deconv/make_mask/refine/predict denoising.
+
+Two AreTomo engines are supported, set via the config's top-level
+"aretomo_engine" key:
+  3 (default): AreTomo3, from raw frames + .mdoc files, producing EVN/ODD
+     half-tomograms -> organize_for_isonet2 even/odd layout -> IsoNet2's
+     isonet2-n2n (noise2noise) method.
+  2: AreTomo2 (aretomo2_step.py), from a directory of already-assembled
+     tilt series .mrc stacks (one file per tilt series, e.g. produced by
+     a separate motion-correction tool), one AreTomo2 call per file, no
+     even/odd split -> prepare_star --full directly on AreTomo2's output
+     dir -> IsoNet2's single-tomogram isonet2 method (with deconv enabled,
+     since there's no even/odd split to feed isonet2-n2n otherwise).
 
 Usage:
     python3 run_pipeline.py --config pipeline_config.yaml
@@ -10,17 +21,18 @@ Usage:
     python3 run_pipeline.py --config pipeline_config.yaml --start-from refine
     python3 run_pipeline.py --config pipeline_config.yaml --stop-after deconv
 
-Every tunable AreTomo3 and IsoNet2 parameter lives in the YAML config (copy
-pipeline_config.example.yaml and edit it) -- this script only decides what
-order stages run in and wires each stage's output into the next stage's
-input. It calls the AreTomo3 binary and the isonet2 project's isonet.py CLI;
-both must be on PATH (or point at them with --aretomo-bin / config
-"isonet_bin" / "aretomo_bin").
+Every tunable AreTomo3/AreTomo2 and IsoNet2 parameter lives in the YAML
+config (copy pipeline_config.example.yaml and edit it) -- this script only
+decides what order stages run in and wires each stage's output into the
+next stage's input. It calls the AreTomo3/AreTomo2 binary and the isonet2
+project's isonet.py CLI; all must be on PATH (or point at them with
+config "isonet_bin" / "aretomo_bin" / "aretomo2_bin").
 
 Requires PyYAML (`pip install pyyaml`).
 """
 import argparse
 import csv
+import os
 import sys
 import time
 from pathlib import Path
@@ -28,6 +40,7 @@ from pathlib import Path
 import yaml
 
 import aretomo_step
+import aretomo2_step
 import isonet2_steps
 import organize_for_isonet2 as prep
 
@@ -128,6 +141,33 @@ def run_organize(cfg: dict, aretomo_out_dir: Path, dry_run: bool):
     return evn_dir, odd_dir, pixel_size, defocus_list
 
 
+def organize_aretomo2_output(aretomo2_out_dir: Path, clean_dir: Path, suffix: str) -> Path:
+    """AreTomo2's output directory mixes each real reconstructed tomogram
+    (<stem><suffix>.mrc) with auxiliary .aln and <stem><suffix>_projXY/
+    _projXZ.mrc preview files. isonet.py's prepare_star --full does NOT
+    filter these out on its own -- confirmed empirically: it picks up the
+    .aln file and the preview-projection volumes as if they were tomograms
+    too, corrupting the resulting star file. So, same as organize_for_
+    isonet2.py does for AreTomo3's EVN/ODD volumes, symlink just the real
+    tomogram volumes into a clean directory instead of pointing --full at
+    AreTomo2's raw output directly."""
+    clean_dir.mkdir(parents=True, exist_ok=True)
+    count = 0
+    for vol in sorted(Path(aretomo2_out_dir).glob(f"*{suffix}.mrc")):
+        if "_proj" in vol.stem:
+            continue
+        dst = clean_dir / vol.name
+        if dst.exists() or dst.is_symlink():
+            dst.unlink()
+        os.symlink(vol.resolve(), dst)
+        count += 1
+    if count == 0:
+        raise RuntimeError(
+            f"no *{suffix}.mrc tomograms found in {aretomo2_out_dir} to organize")
+    print(f"organize: {count} AreTomo2 tomograms -> {clean_dir}")
+    return clean_dir
+
+
 def select_top_ctf_indices(organize_out_dir, n: int) -> set:
     """Read the ctf_scores.csv written by run_organize() and return the
     1-based rlnIndex values (matching the star file's row numbering) of
@@ -197,13 +237,19 @@ def main():
     def active(stage):
         return start_idx <= STAGES.index(stage) <= stop_idx
 
+    aretomo_engine = cfg.get("aretomo_engine", 3)
     organize_cfg = cfg.get("organize", {})
     isonet_cfg = cfg.get("isonet", {})
     isonet_bin = cfg.get("isonet_bin", "isonet.py")
     aretomo_bin = cfg.get("aretomo_bin", "AreTomo3")
+    aretomo2_bin = cfg.get("aretomo2_bin", "AreTomo2")
 
-    aretomo_out_dir = Path(cfg["aretomo"]["out_dir"])
-    evn_dir = odd_dir = None
+    # organize.out_dir doubles as where the star file lives, for both
+    # engines -- for engine 2 it's where the clean (symlinked, aux-file-
+    # free) tomogram directory goes (see organize_aretomo2_output()).
+    aretomo_out_dir = Path(
+        cfg["aretomo2"]["out_dir"] if aretomo_engine == 2 else cfg["aretomo"]["out_dir"])
+    evn_dir = odd_dir = full_dir = None
     pixel_size = None
     defocus_list = None
 
@@ -211,28 +257,57 @@ def main():
     star_file = Path(organize_cfg.get("out_dir", ".")) / star_name
 
     if active("aretomo"):
-        aretomo_out_dir = aretomo_step.run_aretomo3(
-            cfg["aretomo"], binary=aretomo_bin, dry_run=args.dry_run)
+        if aretomo_engine == 2:
+            aretomo_out_dir = aretomo2_step.run_aretomo2_batch(
+                cfg["aretomo2"], binary=aretomo2_bin, dry_run=args.dry_run)
+        else:
+            aretomo_out_dir = aretomo_step.run_aretomo3(
+                cfg["aretomo"], binary=aretomo_bin, dry_run=args.dry_run)
 
     if active("organize"):
-        evn_dir, odd_dir, pixel_size, defocus_list = run_organize(
-            organize_cfg, aretomo_out_dir, args.dry_run)
+        if aretomo_engine == 2:
+            # AreTomo2 produces one full tomogram per input file -- no
+            # even/odd split, but its output dir also contains .aln and
+            # preview-projection files that must be filtered out before
+            # handing anything to prepare_star --full (see
+            # organize_aretomo2_output's docstring).
+            a2_cfg = cfg.get("aretomo2", {})
+            clean_dir = Path(organize_cfg.get("out_dir", Path(aretomo_out_dir) / "tomograms"))
+            if args.dry_run:
+                print(f"+ [dry-run] would organize {aretomo_out_dir} -> {clean_dir}")
+                full_dir = clean_dir
+            else:
+                full_dir = organize_aretomo2_output(
+                    aretomo_out_dir, clean_dir, a2_cfg.get("out_suffix", "_AreTomo"))
+            pixel_size = a2_cfg.get("pix_size", 1.0) * a2_cfg.get("out_bin", 1.0)
+        else:
+            evn_dir, odd_dir, pixel_size, defocus_list = run_organize(
+                organize_cfg, aretomo_out_dir, args.dry_run)
 
     if active("prepare_star"):
         ps_cfg = dict(isonet_cfg.get("prepare_star", {}))
-        if evn_dir is None or odd_dir is None or pixel_size is None:
+        if pixel_size is None or (aretomo_engine != 2 and (evn_dir is None or odd_dir is None)):
             raise RuntimeError(
                 "prepare_star needs the organize stage's output -- run with "
                 "--start-from organize (or earlier), it can't be skipped on its own")
         # isonet.py writes --star_name wherever it resolves (cwd if it's a
-        # bare filename) -- pass an absolute path so it lands in organize's
-        # out_dir, matching where every later stage expects to find it.
-        star_file = Path(organize_cfg["out_dir"]) / ps_cfg.get("star_name", star_name)
+        # bare filename) -- pass an absolute path so it lands in the same
+        # dir every later stage expects to find it in.
+        star_file = Path(organize_cfg.get("out_dir", ".")) / ps_cfg.get("star_name", star_name)
         ps_cfg["star_name"] = str(star_file)
-        isonet2_steps.prepare_star(
-            evn_dir, odd_dir, pixel_size,
-            "[" + ",".join(str(d) for d in defocus_list) + "]",
-            isonet_bin=isonet_bin, dry_run=args.dry_run, **ps_cfg)
+        if aretomo_engine == 2:
+            # AreTomo2 writes no CTF.txt-equivalent file -- no automatic
+            # per-tomogram defocus available, so defocus is omitted
+            # entirely (isonet.py falls back to its own default) unless
+            # the user set isonet.prepare_star.defocus explicitly.
+            isonet2_steps.prepare_star(
+                pixel_size, full_dir=full_dir,
+                isonet_bin=isonet_bin, dry_run=args.dry_run, **ps_cfg)
+        else:
+            isonet2_steps.prepare_star(
+                pixel_size, "[" + ",".join(str(d) for d in defocus_list) + "]",
+                even_dir=evn_dir, odd_dir=odd_dir,
+                isonet_bin=isonet_bin, dry_run=args.dry_run, **ps_cfg)
 
     if active("deconv"):
         dc_cfg = dict(isonet_cfg.get("deconv", {}))

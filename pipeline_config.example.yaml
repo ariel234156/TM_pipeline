@@ -6,7 +6,19 @@
 # executing anything, and check it against `AreTomo3 --help` / `isonet.py
 # <subcommand> --help` on your install before a real run.
 
+# aretomo_engine picks which AreTomo you're using -- see the "aretomo2:"
+# section further down for when to use 2.
+#   3 (default): AreTomo3, from raw frames + .mdoc files -- the "aretomo:"
+#      section below. Produces EVN/ODD half-tomograms -> organize ->
+#      isonet2-n2n (noise2noise) training.
+#   2: AreTomo2, from a directory of already-assembled tilt series .mrc
+#      stacks (e.g. motion-corrected elsewhere) -- the "aretomo2:" section.
+#      One AreTomo2 call per .mrc file, no even/odd split -> isonet2's
+#      single-tomogram method instead (enable isonet.deconv in that case).
+# aretomo_engine: 3
+
 aretomo_bin: AreTomo3      # path to the AreTomo3 binary, if not on PATH
+aretomo2_bin: AreTomo2     # path to the AreTomo2 binary, if not on PATH (only used when aretomo_engine: 2)
 # isonet.py -- a bare command name like this depends on PATH at run time,
 # which depends on the right environment (conda/venv/etc.) being activated
 # in whatever shell launches run_pipeline.py. If more than one isonet.py
@@ -56,9 +68,47 @@ aretomo:
   #   "-OutXF": 1          # above, using the flag's exact spelling
 
 # ---------------------------------------------------------------------------
-# Stage 2: organize AreTomo3's EVN/ODD volumes into the layout isonet2's
-# prepare_star expects (this calls organize_for_isonet2.py's own functions,
-# not a reimplementation of them).
+# Stage 1 ALTERNATIVE: AreTomo2 (aretomo2_step.py) -- only used when
+# aretomo_engine: 2 above. For tilt series you already have as a single
+# assembled MRC stack per position (e.g. motion-corrected by a separate
+# tool), not raw frames + mdoc. One AreTomo2 call runs per *.mrc file
+# found in in_dir. Keys map to AreTomo2 flags via aretomo2_step.FLAG_MAP.
+#
+# AreTomo2 writes no CTF.txt-equivalent output (confirmed against a real
+# run) -- prepare_star gets no automatic per-tomogram defocus in this
+# path, so isonet.prepare_star.defocus is left for isonet.py's own
+# default unless you set it explicitly.
+# ---------------------------------------------------------------------------
+# aretomo2:
+#   in_dir: /path/to/already_assembled_tilt_series/
+#   out_dir: /path/to/aretomo2_out
+#   out_suffix: _AreTomo    # output filenames: <input_stem><out_suffix>.mrc
+#   skip_existing: true     # skip a file if its output already exists (AreTomo2 has no built-in -Resume)
+#   pix_size: 1.51
+#   kv: 300
+#   cs: 2.70
+#   amp_contrast: 0.07
+#   tilt_range: [-60, 60]   # omit to use the MRC header's own tilt range
+#   tilt_axis: [0, -1]      # [angle, -1] = use as-is; [angle, 1] = refine within +/-3 degrees (see AreTomo3 manual's -TiltAxis section, same semantics)
+#   align_z: 600
+#   vol_z: 1200
+#   out_bin: 4
+#   wbp: 1
+#   patch: [4, 4]           # AreTomo2's single local-alignment patch flag (no separate motion-correction stage to apply McPatch to)
+#   gpu: [0]
+#   # extra:                # pass-through for any AreTomo2 flag not listed above
+#   #   "-CropVol": 4096 4096
+
+# ---------------------------------------------------------------------------
+# Stage 2: organize. With aretomo_engine: 3 (default), symlinks AreTomo3's
+# EVN/ODD volumes into the layout isonet2's prepare_star expects (calls
+# organize_for_isonet2.py's own functions). With aretomo_engine: 2,
+# symlinks just the real tomogram volumes from aretomo2.out_dir into
+# out_dir below, filtering out AreTomo2's .aln/preview-projection files
+# (see organize_aretomo2_output() in run_pipeline.py) -- the rest of this
+# section (raw_pixel_size/bin_factor/defocus_source/copy) is ignored in
+# that case; pixel_size is instead computed from aretomo2.pix_size *
+# aretomo2.out_bin.
 # ---------------------------------------------------------------------------
 organize:
   out_dir: /mnt/cryonas02/Users/Gabriel_Frank/Ariel_Cohen/test_ferr/isonet2_input
@@ -95,17 +145,20 @@ isonet:
     # aretomo/organize stages above -- do not set them here.
 
   deconv:
-    # This pipeline's organize/prepare_star stages only ever produce EVN/ODD
-    # half-tomograms (no full tomogram), so rlnTomoName stays None and
-    # deconv's default --input_column rlnTomoName would crash trying to
-    # open "None". It also wouldn't help even if repointed at the halves:
-    # refine's isonet2-n2n training path reads
+    # With aretomo_engine: 3 (default), organize/prepare_star only ever
+    # produce EVN/ODD half-tomograms (no full tomogram), so rlnTomoName
+    # stays None and deconv's default --input_column rlnTomoName would
+    # crash trying to open "None". It also wouldn't help even if
+    # repointed at the halves: refine's isonet2-n2n training path reads
     # rlnTomoReconstructedTomogramHalf1/2 directly and ignores
     # rlnDeconvTomoName entirely (see IsoNet/models/data_sequence.py
-    # _load_statistics_and_mask) -- deconv only matters for the
-    # single-full-tomogram "isonet2" method, which this pipeline doesn't
-    # currently produce input for. Leave disabled unless you add a "full"
-    # tomogram path to the organize stage and use method: isonet2.
+    # _load_statistics_and_mask). Leave disabled in that case.
+    #
+    # With aretomo_engine: 2 (AreTomo2, full tomograms, no even/odd split
+    # -- see the aretomo2: section), rlnTomoName IS populated, deconv
+    # works normally, and it's the recommended way to get CTF deconvolution
+    # for isonet2's single-tomogram method (set isonet.refine.method:
+    # isonet2 too in that case) -- set enabled: true.
     enabled: false
     deconvstrength: 1.0
     snrfalloff: 1.0

@@ -55,11 +55,25 @@ def _isonet_prefix(isonet_bin) -> list:
     return list(isonet_bin) if isinstance(isonet_bin, (list, tuple)) else [isonet_bin]
 
 
-def prepare_star(even_dir, odd_dir, pixel_size, defocus, isonet_bin="isonet.py",
-                  dry_run=False, **flags) -> Path:
-    cmd = _isonet_prefix(isonet_bin) + [
-        "prepare_star", "--even", str(even_dir), "--odd", str(odd_dir),
-        "--pixel_size", str(pixel_size), "--defocus", str(defocus)]
+def prepare_star(pixel_size, defocus=None, even_dir=None, odd_dir=None, full_dir=None,
+                  isonet_bin="isonet.py", dry_run=False, **flags) -> Path:
+    """Pass either (even_dir and odd_dir) for the even/odd half-tomogram
+    workflow (isonet2-n2n), or full_dir for the single-full-tomogram
+    workflow (isonet2) -- e.g. AreTomo2 output, which has no even/odd
+    split. Exactly one of the two must be given. defocus is optional --
+    omit it (leave None) to let isonet.py fall back to its own default
+    (e.g. when no per-tomogram CTF info is available, as with AreTomo2's
+    output -- see aretomo2_step.py)."""
+    if full_dir is not None:
+        cmd = _isonet_prefix(isonet_bin) + ["prepare_star", "--full", str(full_dir)]
+    elif even_dir is not None and odd_dir is not None:
+        cmd = _isonet_prefix(isonet_bin) + [
+            "prepare_star", "--even", str(even_dir), "--odd", str(odd_dir)]
+    else:
+        raise ValueError("prepare_star needs either full_dir, or both even_dir and odd_dir")
+    cmd += ["--pixel_size", str(pixel_size)]
+    if defocus is not None:
+        cmd += ["--defocus", str(defocus)]
     cmd += _flag_args(flags)
     _run(cmd, dry_run)
     return Path(flags.get("star_name", "tomograms.star"))
