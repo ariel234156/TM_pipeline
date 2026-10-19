@@ -2,32 +2,48 @@
 """
 Generate a RELION5-compatible tomograms.star (+ one per-tomogram
 tilt_series/<name>.star) from AreTomo3's own output (.mdoc, _CTF.txt,
-_TLT.txt) -- matches the exact schema PyTom's own RELION5 reader expects
-(pytom_tm.io.parse_relion5_star_data), verified 2026-10-19 by reading
-that function's source directly rather than guessing from docs.
+_TLT.txt).
 
-Schema (verified against pytom_tm's reader):
-  tomograms.star (one row per tomogram):
-    rlnTomoName, rlnTomoTiltSeriesStarFile, rlnTomoTiltSeriesPixelSize,
-    rlnTomoTomogramBinning, rlnTomoHand, rlnAmplitudeContrast, rlnVoltage,
-    rlnSphericalAberration
-  tilt_series/<rlnTomoTiltSeriesStarFile> (one row per tilt image):
-    rlnTomoNominalStageTiltAngle, rlnMicrographPreExposure, rlnDefocusV,
-    rlnDefocusU
+Schema verified 2026-10-19 two ways:
+  1. Against PyTom's own RELION5 reader (pytom_tm.io.parse_relion5_star_data)
+     by reading its source directly -- this is what needs
+     rlnTomoTiltSeriesPixelSize, rlnTomoTomogramBinning, rlnTomoHand,
+     rlnDefocusV/rlnDefocusU on the per-tilt-series file.
+  2. Against a REAL `relion_tomo_import SerialEM` run on this project's
+     own .mdoc/.eer files (RELION5 5.0, installed in this environment) --
+     this is RELION5's own authentic import-stage output, and is what
+     revealed two things the PyTom-only version got wrong/missing:
 
-GOTCHA (confirmed empirically): AreTomo3's own _TLT.txt/_CTF.txt files are
-sorted by TILT ANGLE, not acquisition order -- dose-symmetric collection
-schemes are non-monotonic in angle (e.g. 0, 2, -2, -4, 4, 6, -6, ...), so
-you cannot just accumulate dose row-by-row down those files. The .mdoc
-file's own [ZValue = N] sections ARE in true acquisition order and each
-carries its own ExposureDose, which is what's used here to compute
-rlnMicrographPreExposure (cumulative dose strictly BEFORE each image),
-matched back to the angle-sorted CTF/TLT rows by tilt angle.
+     a) BUG FIXED: rlnMicrographPreExposure is cumulative dose INCLUDING
+        the current image (ends at this exposure), not strictly-before
+        (starting at 0 for the first image) as this module originally
+        computed. Confirmed from real output: the first-acquired tilt's
+        PreExposure equals its own ExposureDose, not 0.
+     b) Added rlnMicrographMovieName (from the .mdoc's SubFramePath,
+        basename only), rlnTomoTiltMovieFrameCount (.mdoc NumSubFrames),
+        rlnTomoNominalTiltAxisAngle (.mdoc TiltAxisAngle, repeated per
+        row -- this is RELION5's own convention, confirmed from real
+        output), rlnTomoNominalDefocus (.mdoc TargetDefocus -- the
+        per-session target, NOT the per-image measured value),
+        rlnMicrographOriginalPixelSize and rlnOpticsGroupName on the
+        top-level file.
 
-This has NOT been validated by actually importing the output into
-RELION5's own GUI/pipeliner -- only against PyTom's reader function,
-which is a narrower bar (it only reads the 8 fields listed above; a real
-RELION5 import job may expect additional columns this doesn't provide).
+GOTCHA (confirmed empirically, both from reading AreTomo3's own files and
+matching real RELION5 import row order): AreTomo3's own _TLT.txt/_CTF.txt
+are sorted by TILT ANGLE, not acquisition order -- dose-symmetric
+collection schemes acquire non-monotonically (e.g. 0, 2, -2, -4, 4, 6,
+-6, ...). A real relion_tomo_import SerialEM run confirmed RELION5's own
+convention is to list tilt-series star rows in ACQUISITION order, which
+this module now matches by iterating the .mdoc's [ZValue] sections (true
+acquisition order) as the primary loop, pulling per-image measured
+defocus (rlnDefocusV/rlnDefocusU, needed by PyTom but not present in a
+raw RELION5 import since CTF estimation happens in a later RELION5 job)
+from AreTomo3's angle-sorted _CTF.txt by matching tilt angle.
+
+This has NOT been validated by actually running the resulting
+tomograms.star through relion_tomo_align_tilt_series or any further
+RELION5 job -- only against relion_tomo_import's raw output schema and
+PyTom's reader.
 """
 from pathlib import Path
 
@@ -36,54 +52,59 @@ import organize_for_isonet2 as prep
 ANGLE_MATCH_TOLERANCE = 0.1  # degrees
 
 
-def parse_mdoc_acquisition_order(mdoc_path: Path) -> list:
-    """Return [(tilt_angle, exposure_dose), ...] in true acquisition
-    order, by reading .mdoc [ZValue = N] sections in file order (N=0,1,2...
-    is the actual acquisition sequence, unlike AreTomo3's own _TLT.txt/
-    _CTF.txt which are angle-sorted)."""
-    entries = []
-    tilt_angle = None
+def parse_mdoc(mdoc_path: Path) -> tuple:
+    """Return (tilt_axis_angle, [per-image dicts in acquisition order]).
+    Each per-image dict has: tilt_angle, exposure_dose, movie_name,
+    frame_count, target_defocus."""
+    tilt_axis_angle = None
+    images = []
+    current = {}
     with open(mdoc_path) as fh:
         for line in fh:
             line = line.strip()
-            if line.startswith("[ZValue"):
-                if tilt_angle is not None:
-                    entries.append((tilt_angle, exposure_dose))
-                tilt_angle = None
-                exposure_dose = None
+            if line.startswith("[T =") and "TiltAxisAngle" in line:
+                # e.g. "[T =   TiltAxisAngle = -92.67  Binning = 1  SpotSize = 6]"
+                part = line.split("TiltAxisAngle", 1)[1].split("=", 1)[1]
+                tilt_axis_angle = float(part.strip().split()[0])
+            elif line.startswith("[ZValue"):
+                if current:
+                    images.append(current)
+                current = {}
             elif line.startswith("TiltAngle"):
-                tilt_angle = float(line.split("=")[1].strip())
+                current["tilt_angle"] = float(line.split("=", 1)[1].strip())
             elif line.startswith("ExposureDose"):
-                exposure_dose = float(line.split("=")[1].strip())
-        if tilt_angle is not None:
-            entries.append((tilt_angle, exposure_dose))
-    return entries
+                current["exposure_dose"] = float(line.split("=", 1)[1].strip())
+            elif line.startswith("TargetDefocus"):
+                current["target_defocus"] = float(line.split("=", 1)[1].strip())
+            elif line.startswith("NumSubFrames"):
+                current["frame_count"] = int(float(line.split("=", 1)[1].strip()))
+            elif line.startswith("SubFramePath"):
+                raw = line.split("=", 1)[1].strip()
+                current["movie_name"] = raw.replace("\\", "/").rsplit("/", 1)[-1]
+        if current:
+            images.append(current)
+
+    if tilt_axis_angle is None:
+        raise ValueError(f"no TiltAxisAngle found in {mdoc_path}")
+    return tilt_axis_angle, images
 
 
-def compute_pre_exposure_by_angle(acquisition_order: list) -> dict:
-    """cumulative dose strictly BEFORE each image, keyed by its tilt
-    angle (rounded for tolerant matching against CTF/TLT files)."""
+def compute_pre_exposure_by_angle(images: list) -> dict:
+    """Cumulative dose INCLUDING each image's own exposure (RELION5's own
+    convention, confirmed against a real relion_tomo_import run -- NOT
+    strictly-before), keyed by rounded tilt angle for tolerant matching."""
     pre_exposure = {}
     cumulative = 0.0
-    for tilt_angle, exposure_dose in acquisition_order:
-        pre_exposure[round(tilt_angle, 1)] = cumulative
-        cumulative += exposure_dose
+    for image in images:
+        cumulative += image["exposure_dose"]
+        pre_exposure[round(image["tilt_angle"], 1)] = cumulative
     return pre_exposure
 
 
-def _nearest_pre_exposure(angle: float, pre_exposure: dict) -> float:
-    key = min(pre_exposure, key=lambda a: abs(a - angle))
-    if abs(key - angle) > ANGLE_MATCH_TOLERANCE:
-        raise ValueError(
-            f"no acquisition-order angle within {ANGLE_MATCH_TOLERANCE} deg of {angle} "
-            f"-- mdoc and _TLT.txt/_CTF.txt may be out of sync for this tilt series")
-    return pre_exposure[key]
-
-
 def read_ctf_full(ctf_path: Path) -> list:
-    """Return [(defocus1, defocus2, dfhand), ...] for every row (angle-
-    sorted, matching _TLT.txt row order -- see organize_for_isonet2.py's
-    parse_ctf_defocus_near_zero for the same column-layout assumption)."""
+    """Return [(defocus1, defocus2, dfhand), ...] in _CTF.txt row order
+    (angle-sorted, matching _TLT.txt); caller zips this with parse_tlt()'s
+    angle list to build an angle-keyed lookup."""
     rows = []
     with open(ctf_path) as fh:
         for line in fh:
@@ -97,8 +118,8 @@ def read_ctf_full(ctf_path: Path) -> list:
     return rows
 
 
-def _write_star(path: Path, header_lines: list, rows: list):
-    lines = ["# Written by relion5_star.py", "", "data_", "", "loop_"]
+def _write_star(path: Path, data_block_name: str, header_lines: list, rows: list):
+    lines = ["# Written by relion5_star.py", "", f"data_{data_block_name}", "", "loop_"]
     lines += [f"{h} #{i+1}" for i, h in enumerate(header_lines)]
     for row in rows:
         lines.append("\t".join(str(v) for v in row))
@@ -106,10 +127,10 @@ def _write_star(path: Path, header_lines: list, rows: list):
 
 
 def write_tilt_series_star(base: str, aretomo_out_dir: Path, mdoc_path: Path,
-                            out_path: Path) -> int:
-    """Write one tilt_series/<base>.star. Returns the dfHand value (taken
-    from the first row -- expected constant for one tilt series) so the
-    caller can put it in the top-level tomograms.star row."""
+                            out_path: Path) -> dict:
+    """Write one tilt_series/<base>.star, in true acquisition order.
+    Returns {'dfhand': int, 'tilt_axis_angle': float} for the caller's
+    top-level tomograms.star row."""
     tlt_path = aretomo_out_dir / f"{base}_TLT.txt"
     ctf_path = aretomo_out_dir / f"{base}_CTF.txt"
     angles = prep.parse_tlt(tlt_path)
@@ -118,25 +139,45 @@ def write_tilt_series_star(base: str, aretomo_out_dir: Path, mdoc_path: Path,
         raise ValueError(
             f"{base}: _TLT.txt has {len(angles)} rows but _CTF.txt has {len(ctf_rows)} -- "
             f"can't pair them up")
+    defocus_by_angle = {round(a, 1): (d1, d2, h) for a, (d1, d2, h) in zip(angles, ctf_rows)}
 
-    acquisition_order = parse_mdoc_acquisition_order(mdoc_path)
-    pre_exposure = compute_pre_exposure_by_angle(acquisition_order)
+    tilt_axis_angle, images = parse_mdoc(mdoc_path)
+    pre_exposure_by_angle = compute_pre_exposure_by_angle(images)
 
     rows = []
     dfhand = None
-    for angle, (d1, d2, h) in zip(angles, ctf_rows):
-        pre = _nearest_pre_exposure(angle, pre_exposure)
-        rows.append((angle, round(pre, 4), d1, d2))
+    for image in images:
+        angle = image["tilt_angle"]
+        pre = _nearest_lookup(angle, pre_exposure_by_angle)
+        d1, d2, h = _nearest_lookup(angle, defocus_by_angle)
         dfhand = h
+        rows.append((
+            image.get("movie_name", ""),
+            image.get("frame_count", ""),
+            angle,
+            tilt_axis_angle,
+            round(pre, 4),
+            image.get("target_defocus", ""),
+            d1, d2,
+        ))
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     _write_star(
-        out_path,
-        ["_rlnTomoNominalStageTiltAngle", "_rlnMicrographPreExposure",
+        out_path, base,
+        ["_rlnMicrographMovieName", "_rlnTomoTiltMovieFrameCount",
+         "_rlnTomoNominalStageTiltAngle", "_rlnTomoNominalTiltAxisAngle",
+         "_rlnMicrographPreExposure", "_rlnTomoNominalDefocus",
          "_rlnDefocusV", "_rlnDefocusU"],
         rows,
     )
-    return dfhand
+    return {"dfhand": dfhand, "tilt_axis_angle": tilt_axis_angle}
+
+
+def _nearest_lookup(angle: float, table: dict):
+    key = min(table, key=lambda a: abs(a - angle))
+    if abs(key - angle) > ANGLE_MATCH_TOLERANCE:
+        raise ValueError(f"no entry within {ANGLE_MATCH_TOLERANCE} deg of angle {angle}")
+    return table[key]
 
 
 def write_tomograms_star(cfg: dict, aretomo_out_dir: Path, mdoc_dir: Path,
@@ -144,8 +185,10 @@ def write_tomograms_star(cfg: dict, aretomo_out_dir: Path, mdoc_dir: Path,
     """Write out_dir/tomograms.star plus out_dir/tilt_series/<base>.star
     for every tilt series found in aretomo_out_dir (same discovery logic
     as organize_for_isonet2.py's find_candidates). cfg needs: pix_size,
-    at_bin (list, first value used), amp_contrast, kv, cs."""
+    at_bin (list, first value used), amp_contrast, kv, cs. Optional:
+    optics_group_name (default 'opticsGroup1')."""
     tilt_series_dir = out_dir / "tilt_series"
+    optics_group_name = cfg.get("optics_group_name", "opticsGroup1")
     rows = []
     for base, evn, odd, full in prep.find_candidates(Path(aretomo_out_dir)):
         mdoc_path = Path(mdoc_dir) / f"{base}.mdoc"
@@ -153,12 +196,13 @@ def write_tomograms_star(cfg: dict, aretomo_out_dir: Path, mdoc_dir: Path,
             print(f"  [SKIP] {base}: no .mdoc file found at {mdoc_path}")
             continue
         star_name = f"{base}.star"
-        dfhand = write_tilt_series_star(
+        meta = write_tilt_series_star(
             base, Path(aretomo_out_dir), mdoc_path, tilt_series_dir / star_name)
         rows.append((
             base, f"tilt_series/{star_name}",
-            cfg["pix_size"], cfg["at_bin"][0], dfhand,
-            cfg["amp_contrast"], cfg["kv"], cfg["cs"],
+            cfg["kv"], cfg["cs"], cfg["amp_contrast"],
+            cfg["pix_size"], cfg["pix_size"], cfg["at_bin"][0],
+            meta["dfhand"], optics_group_name,
         ))
 
     if not rows:
@@ -167,10 +211,11 @@ def write_tomograms_star(cfg: dict, aretomo_out_dir: Path, mdoc_dir: Path,
 
     out_path = out_dir / "tomograms.star"
     _write_star(
-        out_path,
-        ["_rlnTomoName", "_rlnTomoTiltSeriesStarFile", "_rlnTomoTiltSeriesPixelSize",
-         "_rlnTomoTomogramBinning", "_rlnTomoHand", "_rlnAmplitudeContrast",
-         "_rlnVoltage", "_rlnSphericalAberration"],
+        out_path, "global",
+        ["_rlnTomoName", "_rlnTomoTiltSeriesStarFile", "_rlnVoltage",
+         "_rlnSphericalAberration", "_rlnAmplitudeContrast",
+         "_rlnMicrographOriginalPixelSize", "_rlnTomoTiltSeriesPixelSize",
+         "_rlnTomoTomogramBinning", "_rlnTomoHand", "_rlnOpticsGroupName"],
         rows,
     )
     print(f"relion5_star: {len(rows)} tomograms -> {out_path}")
