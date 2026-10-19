@@ -151,6 +151,17 @@ SECTIONS = [
         ("isonet.predict.gpuID", "GPU IDs", "str"),
         ("isonet.predict.output_dir", "Output dir", "str"),
     ]),
+    ("PyTom -- template matching (optional)", [
+        ("pytom.bin_dir", "pytom_tm conda env's bin/ dir", "path"),
+        ("pytom.reference_map", "Reference density map (MRC)", "path"),
+        ("pytom.particle_diameter_angstrom", "Particle diameter (A)", "float"),
+        ("pytom.voxel_size_angstrom", "Voxel size (A) -- must match predict's REAL output pixel size, not its MRC header", "float"),
+        ("pytom.out_dir", "Output dir", "path"),
+        ("pytom.gpu", "GPU IDs", "intlist"),
+        ("pytom.create_mask.sigma", "Mask edge drop-off (px)", "float"),
+        ("pytom.match_template.tilt_angles", "Tilt angles (min max)", "intlist"),
+        ("pytom.extract_candidates.number_of_particles", "Max particles to extract per tomogram", "int"),
+    ]),
 ]
 
 KEY_RE = re.compile(r'^(?P<indent>[ \t]*)(?P<key>"[^"]+"|[A-Za-z0-9_.\-]+):(?P<rest>.*)$')

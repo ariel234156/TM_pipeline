@@ -43,8 +43,10 @@ import aretomo_step
 import aretomo2_step
 import isonet2_steps
 import organize_for_isonet2 as prep
+import pytom_step
 
-STAGES = ["aretomo", "organize", "prepare_star", "deconv", "make_mask", "refine", "predict"]
+STAGES = ["aretomo", "organize", "prepare_star", "deconv", "make_mask", "refine", "predict",
+          "tm_template", "tm_mask", "tm_match", "tm_extract", "tm_merge"]
 
 
 def log_run_params(cfg: dict, config_path: Path) -> Path:
@@ -354,6 +356,34 @@ def main():
                 model = candidates[-1]
                 print(f"predict: no model set in config, using most recent checkpoint: {model}")
         isonet2_steps.predict(star_file, model, isonet_bin=isonet_bin, dry_run=args.dry_run, **pr_cfg)
+
+    pytom_cfg = cfg.get("pytom", {})
+    tomogram_dir = Path(pytom_cfg.get(
+        "tomogram_dir", isonet_cfg.get("predict", {}).get("output_dir", "corrected_tomos")))
+    template_file = Path(pytom_cfg.get("out_dir", ".")) / "template.mrc"
+    mask_file = Path(pytom_cfg.get("out_dir", ".")) / "mask.mrc"
+    match_destinations = {}
+
+    if active("tm_template"):
+        template_file = pytom_step.create_template(pytom_cfg, args.dry_run)
+
+    if active("tm_mask"):
+        mask_file = pytom_step.create_mask(pytom_cfg, template_file, args.dry_run)
+
+    if active("tm_match"):
+        match_destinations = pytom_step.match_template_batch(
+            pytom_cfg, template_file, mask_file, tomogram_dir, args.dry_run)
+
+    if active("tm_extract"):
+        if not match_destinations:
+            # resuming from a separate invocation -- reconstruct
+            # destinations from what's already on disk under out_dir/match
+            match_root = Path(pytom_cfg.get("out_dir", ".")) / "match"
+            match_destinations = {d.name: d for d in sorted(match_root.glob("*")) if d.is_dir()}
+        pytom_step.extract_candidates_batch(pytom_cfg, match_destinations, args.dry_run)
+
+    if active("tm_merge"):
+        pytom_step.merge_stars(pytom_cfg, args.dry_run)
 
     print("\nPipeline finished.")
 

@@ -219,3 +219,50 @@ isonet:
     padding_factor: 1.5
     gpuID: "0,1,2,3"
     output_dir: corrected_tomos
+
+# ---------------------------------------------------------------------------
+# Stage 8 (optional): template matching via PyTom's pytom-match-pick
+# toolkit (pytom_step.py, conda env pytom_tm -- scripts have an absolute
+# shebang pointing at that env's own python, so invoking them by full path
+# is immune to PATH/activation state, unlike isonet.py). Stages:
+# tm_template -> tm_mask -> tm_match (per tomogram) -> tm_extract (per
+# tomogram) -> tm_merge. Runs against the IsoNet2-denoised tomograms from
+# the predict stage above (tomogram_dir defaults to isonet.predict.
+# output_dir if not set here).
+#
+# GOTCHA (confirmed with a real run): IsoNet2's predict step does not
+# write the tomogram's real pixel size into its output MRC header
+# (observed: header says 1.0 A/px regardless of the actual value).
+# pytom_match_template.py falls back to the MRC header if voxel_size_
+# angstrom isn't given explicitly -- pytom_step.py always passes it
+# explicitly from this config instead. You'll see "WARNING: Provided
+# voxel size does not match voxel size annotated in tomogram/template
+# mrc." on every run because of this -- that's expected, and confirms the
+# explicit value is being used instead of the (wrong) header value.
+#
+# create_mask's box size and mask radius (in pixels) are computed
+# automatically from create_template's actual output box size and
+# particle_diameter_angstrom / voxel_size_angstrom -- not set directly.
+# ---------------------------------------------------------------------------
+# pytom:
+#   bin_dir: /home/coari/.conda/envs/pytom_tm/bin
+#   reference_map: /path/to/reference.mrc
+#   particle_diameter_angstrom: 150     # in Angstrom, along the longest axis for non-globular particles
+#   voxel_size_angstrom: 6.04           # must match isonet.predict's REAL output pixel size -- see GOTCHA above
+#   # tomogram_dir:                     # defaults to isonet.predict.output_dir above
+#   out_dir: /path/to/template_matching
+#   gpu: [0, 1, 2, 3]
+#   # center: true                     # center the reference's density by center of mass (default true)
+#
+#   create_mask:
+#     sigma: 1.0                       # gaussian drop-off at mask edges, in pixels
+#
+#   match_template:
+#     tilt_angles: [-60, 60]           # or a .tlt/.rawtlt file path instead of [min, max]
+#     # low_pass: 20                   # resolution in A, if the template was pre-filtered to one
+#     # random-phase-correction: true  # STOPGAP-style noise subtraction -- roughly doubles compute time
+#
+#   extract_candidates:
+#     number_of_particles: 500
+#     # cut_off: 0.5                  # override automatic cutoff estimation
+#   # merged_star_name: all_particles.star
