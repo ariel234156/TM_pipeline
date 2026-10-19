@@ -269,15 +269,30 @@ def main():
 
     if active("relion5_star"):
         # Optional: generate a RELION5-compatible tomograms.star (+ one
-        # tilt_series/<name>.star per tomogram) from AreTomo3's own .mdoc/
-        # _CTF.txt/_TLT.txt output. Only meaningful for aretomo_engine: 3
-        # -- AreTomo2 (engine 2) produces no per-tilt CTF/angle files to
-        # build this from.
+        # tilt_series/<name>.star per tomogram). Both engines need a
+        # companion .mdoc per tomogram -- AreTomo2's input stacks must
+        # have one sitting next to them for this to work (see
+        # relion5_star.py's module docstring).
+        r5_cfg = cfg.get("relion5_star", {})
         if aretomo_engine == 2:
-            print("relion5_star: skipped -- not applicable to aretomo_engine: 2 "
-                  "(AreTomo2 produces no per-tilt .mdoc/CTF metadata)")
+            a2_cfg = cfg.get("aretomo2", {})
+            r5_out_dir = Path(r5_cfg.get("out_dir", Path(a2_cfg["out_dir"]) / "relion5"))
+            mdoc_dir = Path(r5_cfg.get("mdoc_dir", a2_cfg["in_dir"]))
+            if args.dry_run:
+                print(f"+ [dry-run] would write {r5_out_dir}/tomograms.star "
+                      f"from {aretomo_out_dir} / {mdoc_dir} (aretomo_engine: 2)")
+            else:
+                relion5_star.write_tomograms_star_aretomo2(
+                    {"pix_size": a2_cfg["pix_size"],
+                     "out_bin": a2_cfg["out_bin"],
+                     "amp_contrast": a2_cfg.get("amp_contrast", 0.07),
+                     "kv": a2_cfg["kv"],
+                     "cs": a2_cfg["cs"],
+                     "out_suffix": a2_cfg.get("out_suffix", "_AreTomo"),
+                     "optics_group_name": r5_cfg.get("optics_group_name", "opticsGroup1"),
+                     "defocus_handedness": r5_cfg.get("defocus_handedness", 1)},
+                    aretomo_out_dir, mdoc_dir, r5_out_dir)
         else:
-            r5_cfg = cfg.get("relion5_star", {})
             r5_out_dir = Path(r5_cfg.get("out_dir", Path(cfg["aretomo"]["out_dir"]) / "relion5"))
             mdoc_dir = Path(r5_cfg.get("mdoc_dir", cfg["aretomo"]["in_prefix"]))
             if args.dry_run:
@@ -289,7 +304,8 @@ def main():
                      "at_bin": cfg["aretomo"]["at_bin"],
                      "amp_contrast": cfg["aretomo"].get("amp_contrast", 0.07),
                      "kv": cfg["aretomo"]["kv"],
-                     "cs": cfg["aretomo"]["cs"]},
+                     "cs": cfg["aretomo"]["cs"],
+                     "optics_group_name": r5_cfg.get("optics_group_name", "opticsGroup1")},
                     aretomo_out_dir, mdoc_dir, r5_out_dir)
 
     if active("organize"):

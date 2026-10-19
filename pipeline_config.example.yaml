@@ -100,24 +100,40 @@ aretomo:
 #   #   "-CropVol": 4096 4096
 
 # ---------------------------------------------------------------------------
-# Stage 1b (optional, aretomo_engine: 3 only): generate a RELION5-
-# compatible tomograms.star (+ one tilt_series/<name>.star per tomogram)
-# from AreTomo3's own .mdoc/_CTF.txt/_TLT.txt output (relion5_star.py).
-# Schema verified against PyTom's own RELION5 reader
-# (pytom_tm.io.parse_relion5_star_data) by reading its source directly --
-# NOT validated by actually importing into RELION5's own GUI/pipeliner,
-# which may expect additional columns this doesn't provide.
+# Stage 1b (optional): generate a RELION5-compatible tomograms.star (+ one
+# tilt_series/<name>.star per tomogram), via relion5_star.py. Works for
+# EITHER engine -- which function/columns get used depends on
+# aretomo_engine above:
+#   3: built from AreTomo3's own .mdoc/_CTF.txt/_TLT.txt output (real
+#      per-image measured defocus). mdoc_dir defaults to aretomo.in_prefix.
+#   2: built from each tomogram's companion .mdoc file alone -- AreTomo2
+#      does no CTF estimation of its own, so this uses the .mdoc's own
+#      per-image "Defocus" field (SerialEM's on-the-fly estimate, less
+#      refined than AreTomo3's real CTF fit) for both rlnDefocusV/
+#      rlnDefocusU, and defocus_handedness below for rlnTomoHand (no
+#      per-dataset measurement available for this path). Requires a
+#      companion <base>.mdoc next to each AreTomo2 input .mrc -- if your
+#      pre-assembled stacks don't have one, this path has nothing to build
+#      from and skips that tomogram. mdoc_dir defaults to aretomo2.in_dir.
+# Schema verified two ways: against PyTom's own RELION5 reader
+# (pytom_tm.io.parse_relion5_star_data), and (aretomo_engine: 3 path only)
+# against a REAL relion_tomo_import SerialEM run -- row order, pre-
+# exposure convention, and column set all matched exactly. The
+# aretomo_engine: 2 path has NOT been cross-checked against a real RELION5
+# import.
 #
-# GOTCHA (confirmed empirically): AreTomo3's _TLT.txt/_CTF.txt are sorted
-# by TILT ANGLE, not acquisition order -- dose-symmetric schemes acquire
-# non-monotonically (e.g. 0, 2, -2, -4, 4, ...). Dose accumulation
-# (rlnMicrographPreExposure) is computed from the .mdoc file's own
-# [ZValue] sections instead, which ARE in true acquisition order and each
-# carry their own ExposureDose.
+# GOTCHA (aretomo_engine: 3, confirmed empirically): AreTomo3's
+# _TLT.txt/_CTF.txt are sorted by TILT ANGLE, not acquisition order --
+# dose-symmetric schemes acquire non-monotonically (e.g. 0, 2, -2, -4, 4,
+# ...). Dose accumulation (rlnMicrographPreExposure) is computed from the
+# .mdoc file's own [ZValue] sections instead, which ARE in true
+# acquisition order and each carry their own ExposureDose.
 # ---------------------------------------------------------------------------
 # relion5_star:
 #   out_dir: /path/to/relion5_star_output
-#   # mdoc_dir:               # defaults to aretomo.in_prefix above
+#   # mdoc_dir:               # defaults to aretomo.in_prefix (engine 3) or aretomo2.in_dir (engine 2)
+#   # optics_group_name: opticsGroup1
+#   defocus_handedness: 1    # aretomo_engine: 2 only -- no per-dataset measurement available; RELION5 itself defaults this to 1 when unknown
 
 # ---------------------------------------------------------------------------
 # Stage 2: organize. With aretomo_engine: 3 (default), symlinks AreTomo3's

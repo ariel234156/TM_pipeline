@@ -85,7 +85,7 @@ background rather than in a session that might get interrupted.
 | `aretomo2_step.py` | Batch-runs AreTomo2 over pre-assembled tilt series MRC stacks (`aretomo_engine: 2`) |
 | `isonet2_steps.py` | Thin wrappers around `isonet.py`'s subcommands |
 | `organize_for_isonet2.py` | Organizes AreTomo3's EVN/ODD volumes into IsoNet2's expected layout |
-| `relion5_star.py` | Generates a RELION5-compatible `tomograms.star` from AreTomo3's own output (optional, `relion5_star` stage) |
+| `relion5_star.py` | Generates a RELION5-compatible `tomograms.star` from either engine's output (optional, `relion5_star` stage) |
 | `pytom_step.py` | Template matching via PyTom's pytom-match-pick toolkit (optional, `tm_*` stages) |
 | `pipeline_config.example.yaml` | Template config — copy to `pipeline_config.yaml` and edit |
 | `config_editor.py` | Local web form for editing the config |
@@ -111,10 +111,16 @@ on every run because of this; that's expected.
 For RELION5-compatible output: set `"relion5-compat": true` under
 `pytom.extract_candidates` to get `particles.star` with centered
 coordinates in Angstrom (a real pytom flag). For a matching
-`tomograms.star`, the optional `relion5_star` stage (before `organize`,
-`aretomo_engine: 3` only) generates one from AreTomo3's own `.mdoc`/
-`_CTF.txt`/`_TLT.txt` output — schema verified against PyTom's own
-RELION5 reader, but not validated by an actual RELION5 import.
+`tomograms.star`, the optional `relion5_star` stage (before `organize`)
+generates one — from AreTomo3's own `.mdoc`/`_CTF.txt`/`_TLT.txt` output
+for `aretomo_engine: 3`, or from each tomogram's companion `.mdoc` alone
+for `aretomo_engine: 2` (AreTomo2 does no CTF estimation of its own, so
+per-image defocus comes from the `.mdoc`'s own SerialEM-measured value
+instead). The `aretomo_engine: 3` path's schema was verified against both
+PyTom's own RELION5 reader and a real `relion_tomo_import SerialEM` run
+(row order, pre-exposure convention, and column set all matched exactly);
+the `aretomo_engine: 2` path has only been checked against PyTom's reader,
+not a real RELION5 import.
 
 ## Known gotchas
 

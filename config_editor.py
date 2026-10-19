@@ -151,8 +151,9 @@ SECTIONS = [
         ("isonet.predict.gpuID", "GPU IDs", "str"),
         ("isonet.predict.output_dir", "Output dir", "str"),
     ]),
-    ("RELION5 star export (optional, aretomo_engine: 3 only)", [
+    ("RELION5 star export (optional, works with either aretomo_engine)", [
         ("relion5_star.out_dir", "Output dir", "path"),
+        ("relion5_star.defocus_handedness", "Defocus handedness (aretomo_engine: 2 only)", "int"),
     ]),
     ("PyTom -- template matching (optional)", [
         ("pytom.bin_dir", "pytom_tm conda env's bin/ dir", "path"),
