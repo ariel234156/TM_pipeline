@@ -53,15 +53,36 @@ paths, but the actual RAPTOR invocation itself has NOT been re-run here.
 Validate the first real run carefully.
 """
 import math
+import os
 import shutil
 import subprocess
 from pathlib import Path
 
 
-def _run(cmd: list, dry_run: bool):
+def _env(cfg: dict):
+    """RAPTOR (and possibly other IMOD tools) internally call sibling
+    IMOD programs (e.g. RAPTOR calls tiltalign) by bare name, relying on
+    PATH -- confirmed from a real failure: "ERROR: error executing the
+    command tiltalign -param ... in function RAPTOPR::Main" when PATH
+    (inherited from whatever launched run_pipeline.py) didn't include
+    IMOD's bin dir. So PATH/LD_LIBRARY_PATH are always set explicitly
+    here from cfg.bin_dir, the same way IMOD's own RAPTOR wrapper script
+    sets LD_LIBRARY_PATH for itself -- not relying on the caller's shell
+    environment at all."""
+    bin_dir = cfg.get("bin_dir") if cfg else None
+    if not bin_dir:
+        return None
+    imod_dir = Path(bin_dir).parent
+    env = dict(os.environ)
+    env["PATH"] = f"{bin_dir}:{env.get('PATH', '')}"
+    env["LD_LIBRARY_PATH"] = f"{imod_dir}/qtlib:{imod_dir}/lib:{env.get('LD_LIBRARY_PATH', '')}"
+    return env
+
+
+def _run(cmd: list, dry_run: bool, cfg: dict = None):
     print("+ " + " ".join(str(c) for c in cmd))
     if not dry_run:
-        subprocess.run(cmd, check=True)
+        subprocess.run(cmd, check=True, env=_env(cfg))
 
 
 def _bin(cfg: dict, name: str) -> str:
@@ -94,7 +115,7 @@ def align_frames_eer(cfg: dict, mdoc_path: Path, out_dir: Path, dry_run: bool) -
     # Bootstrap the angle file from the .mdoc directly (extracttilts
     # supports -mdoc for exactly this -- no image header exists yet since
     # nothing has been assembled from the raw frames at this point).
-    _run([_bin(cfg, "extracttilts"), "-mdoc", str(mdoc_path), str(angles_path)], dry_run)
+    _run([_bin(cfg, "extracttilts"), "-mdoc", str(mdoc_path), str(angles_path)], dry_run, cfg)
 
     eer_params = cfg.get("eer_params", [1, 10, -1])
     cmd = [_bin(cfg, "alignframes"),
@@ -107,7 +128,7 @@ def align_frames_eer(cfg: dict, mdoc_path: Path, out_dir: Path, dry_run: bool) -
             "-tilt", str(angles_path),
             "-reorder", "1"]
     cmd += _extra_args(cfg.get("align_frames", {}))
-    _run(cmd, dry_run)
+    _run(cmd, dry_run, cfg)
     return stack_path, base
 
 
@@ -117,7 +138,7 @@ def extract_rawtlt(cfg: dict, stack: Path, out_name: Path, dry_run: bool) -> Pat
     (it names the output using the FUTURE binned stack's basename even
     though extraction runs on the pre-binned file -- tilt angle doesn't
     change with binning, only the filename needs to match later)."""
-    _run([_bin(cfg, "extracttilts"), str(stack), str(out_name)], dry_run)
+    _run([_bin(cfg, "extracttilts"), str(stack), str(out_name)], dry_run, cfg)
     return out_name
 
 
@@ -133,7 +154,7 @@ def erase_xrays(cfg: dict, stack: Path, out_dir: Path, dry_run: bool) -> Path:
             "-xyscan", str(xr_cfg.pop("xyscan", 128)),
             "-edge", str(xr_cfg.pop("edge", 64))]
     cmd += _extra_args(xr_cfg)
-    _run(cmd, dry_run)
+    _run(cmd, dry_run, cfg)
     return out_stack
 
 
@@ -151,7 +172,7 @@ def bin_and_normalize(cfg: dict, stack: Path, out_dir: Path, dry_run: bool) -> t
         min_shift = 0
     else:
         result = subprocess.run([_bin(cfg, "header"), "-minimum", str(stack)],
-                                 capture_output=True, text=True, check=True)
+                                 capture_output=True, text=True, check=True, env=_env(cfg))
         min_val = float(result.stdout.split()[0])
         min_shift = 10 - int(min_val)
 
@@ -172,13 +193,13 @@ def bin_and_normalize(cfg: dict, stack: Path, out_dir: Path, dry_run: bool) -> t
            "-antialias", "4",
            "-mode", "2",
            str(stack), str(binned)]
-    _run(cmd, dry_run)
+    _run(cmd, dry_run, cfg)
     return binned, base
 
 
 def _section_count(cfg: dict, stack: Path) -> int:
     result = subprocess.run([_bin(cfg, "header"), "-size", str(stack)],
-                             capture_output=True, text=True, check=True)
+                             capture_output=True, text=True, check=True, env=_env(cfg))
     return int(result.stdout.split()[2])
 
 
@@ -231,7 +252,7 @@ def run_raptor(cfg: dict, binned_stack: Path, out_dir: Path, exec_path: str, dry
     else:
         rc_cfg.pop("markers_per_image", None)
     cmd += _extra_args(rc_cfg)
-    _run(cmd, dry_run)
+    _run(cmd, dry_run, cfg)
 
     tlt_dst, xf_dst, fid_dst, ali_dst = (out_dir / f"{base}.tlt", out_dir / f"{base}.xf",
                                           out_dir / f"{base}.fid.txt", out_dir / f"{base}.ali")
@@ -277,12 +298,12 @@ def build_aligned_stack(cfg: dict, binned_stack: Path, xf: Path, out_ali: Path, 
     build, not documented, guaranteed-stable behavior."""
     if dry_run:
         out_ali.parent.mkdir(parents=True, exist_ok=True)
-        _run([_bin(cfg, "newstack"), "-xform", str(xf), str(binned_stack), str(out_ali)], dry_run)
+        _run([_bin(cfg, "newstack"), "-xform", str(xf), str(binned_stack), str(out_ali)], dry_run, cfg)
         return out_ali
 
     cmd = [_bin(cfg, "newstack"), "-xform", str(xf), str(binned_stack), str(out_ali)]
     print("+ " + " ".join(str(c) for c in cmd))
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = subprocess.run(cmd, capture_output=True, text=True, env=_env(cfg))
     if result.returncode == 0:
         return out_ali
 
@@ -301,8 +322,8 @@ def build_aligned_stack(cfg: dict, binned_stack: Path, xf: Path, out_ali: Path, 
           f"see build_aligned_stack's docstring) -- excluding the last {n_drop} sections")
     trimmed = out_ali.with_name(f"{binned_stack.stem}_trimmed.st")
     exclude_list = ",".join(str(n_sections - 1 - i) for i in range(n_drop))
-    _run([_bin(cfg, "newstack"), "-exclude", exclude_list, str(binned_stack), str(trimmed)], dry_run)
-    _run([_bin(cfg, "newstack"), "-xform", str(xf), str(trimmed), str(out_ali)], dry_run)
+    _run([_bin(cfg, "newstack"), "-exclude", exclude_list, str(binned_stack), str(trimmed)], dry_run, cfg)
+    _run([_bin(cfg, "newstack"), "-xform", str(xf), str(trimmed), str(out_ali)], dry_run, cfg)
     trimmed.unlink(missing_ok=True)
     return out_ali
 
@@ -320,7 +341,7 @@ def erase_gold(cfg: dict, raptor_result: dict, out_dir: Path, dry_run: bool) -> 
     fid_mod = out_dir / f"{base}_fid.mod"
     _run([_bin(cfg, "point2model"), "-scat",
           "-input", str(raptor_result["fid_txt"]),
-          "-output", str(fid_mod)], dry_run)
+          "-output", str(fid_mod)], dry_run, cfg)
 
     erased_ali = out_dir / f"{base}_noGold.ali"
     better_radius = eg_cfg.pop("better_radius_px", None)
@@ -332,7 +353,7 @@ def erase_gold(cfg: dict, raptor_result: dict, out_dir: Path, dry_run: bool) -> 
     if better_radius:
         cmd += ["-better", str(better_radius)]
     cmd += _extra_args(eg_cfg)
-    _run(cmd, dry_run)
+    _run(cmd, dry_run, cfg)
     return erased_ali
 
 
@@ -353,7 +374,7 @@ def reconstruct(cfg: dict, ali: Path, tlt: Path, out_dir: Path, suffix: str, dry
     if fake_sirt and suffix:
         cmd += ["-FakeSIRTiterations", str(fake_sirt)]
     cmd += _extra_args(rec_cfg)
-    _run(cmd, dry_run)
+    _run(cmd, dry_run, cfg)
     return out_mrc
 
 
@@ -373,7 +394,7 @@ def filtered_reconstruct(cfg: dict, ali: Path, tlt: Path, out_dir: Path, dry_run
            "-highpass", str(high_pass),
            "-lowpass", ",".join(str(v) for v in low_pass)]
     cmd += _extra_args(flt_cfg)
-    _run(cmd, dry_run)
+    _run(cmd, dry_run, cfg)
     return reconstruct(cfg, flt_ali, tlt, out_dir, suffix="", dry_run=dry_run)
 
 
