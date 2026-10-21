@@ -114,15 +114,28 @@ aretomo:
 # Needs REAL gold fiducial markers in the sample (RAPTOR can't align
 # without them).
 #
-# CAVEAT (2026-10-21, acknowledged -- not re-tested): every flag below was
-# verified against a real IMOD install's --help/man-page text and the
-# originally-working bin_tomo.sh script this is based on, but no fiducial-
-# containing dataset was available to run RAPTOR itself end-to-end when
-# this was written. Validate the first real run carefully -- see
-# imod_step.py's module docstring for the full chain and reasoning.
+# CHECK YOUR IMOD VERSION before trusting a RAPTOR crash to be a bug in
+# this pipeline: confirmed on real gold-fiducial data that IMOD 5.1.0
+# (RHEL8 build, Dec 2024) has a real tiltalign crash -- reproducible
+# across bash, Python subprocess (argv-list and shell=True), every
+# -mode/-input flag spelling tried, with or without correct PATH/
+# LD_LIBRARY_PATH. tiltalign dies partway through writing the .xf
+# transform file, right after printing the full per-point residual-error
+# table, leaving .xf empty or truncated -- and RAPTOR's own exit code
+# still reports 0, so it fails silently unless something checks the
+# actual output. Installing IMOD 5.1.13 (13 point-releases newer) into a
+# user-writable directory (no sudo/system changes needed if /usr/local
+# isn't writable) and pointing bin_dir at it dramatically reduced the
+# crash (went from failing essentially every attempt to succeeding most
+# of the time, with any remaining failure recovering on a plain retry of
+# the same input) -- but did NOT prove to eliminate it completely. This
+# pipeline deliberately does not add automatic retry for it (keep it
+# simple, fail loudly) -- if a tilt series comes out with an empty or
+# missing .xf/.ali, just re-run run_pipeline.py --start-from imod_align
+# for that one tilt series.
 # ---------------------------------------------------------------------------
 # imod:
-#   bin_dir: /usr/local/imod_5.1.0/bin
+#   bin_dir: /usr/local/imod_5.1.0/bin  # if you hit the crash above, try a newer IMOD install instead
 #   input_mode: eer         # eer (raw frames + .mdoc, via alignframes) | mrc (pre-assembled .st/.mrc)
 #   in_dir: /path/to/eer_frames_or_mrc_stacks/
 #   in_suffix: .mdoc        # input_mode: eer only

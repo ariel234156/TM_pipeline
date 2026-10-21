@@ -2,7 +2,20 @@
 """
 Fiducial-based tilt series alignment and reconstruction via IMOD + RAPTOR
 (imod_raptor engine, conda-free install at imod.bin_dir -- confirmed real,
-not a conda env, on this machine: /usr/local/imod_5.1.0/bin).
+not a conda env).
+
+KNOWN ISSUE (2026-10-21): the RAPTOR/tiltalign binary itself can crash
+partway through writing the .xf transform file on real gold-fiducial
+data, right after printing the full per-point residual-error table,
+leaving .xf empty or truncated -- confirmed independent of how this
+module invokes it (argv-list vs shell=True, -mode 1 vs 2, flag spelling,
+PATH/LD_LIBRARY_PATH). RAPTOR's own exit code still reports 0. An IMOD
+version upgrade (5.1.0 -> 5.1.13 here) dramatically reduced the
+frequency but did not prove to eliminate it -- see the imod: section
+comment in pipeline_config.example.yaml for the full writeup. This
+module deliberately does NOT retry automatically; if a tilt series comes
+out with an empty/missing .xf or .ali, re-run the imod_align stage for
+just that one tilt series.
 
 This is a THIRD, independent engine alongside AreTomo3/AreTomo2 -- it does
 NOT route through AreTomo for motion correction. Two separate input modes,
