@@ -53,6 +53,7 @@ paths, but the actual RAPTOR invocation itself has NOT been re-run here.
 Validate the first real run carefully.
 """
 import math
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -159,14 +160,26 @@ def bin_and_normalize(cfg: dict, stack: Path, out_dir: Path, dry_run: bool) -> t
     # triggers "ERROR: NEWSTACK - You must specify number of sections to
     # write to each output file" (those flags are for a different list-
     # accumulation mode, for combining many single-section files).
+    #
+    # -mode 2 (float), NOT -mode 1 (16-bit int) -- confirmed against a
+    # real fiducial dataset: RAPTOR's own MRC reader fails on mode 1 with
+    # a generic "Error opening file ... not enough memory" (misleading --
+    # the file is fine, RAPTOR just can't read that mode), while mode 2
+    # let it track fiducials successfully (58/61 markers found).
     cmd = [_bin(cfg, "newstack"),
            "-multadd", f"1,{min_shift}",
            "-bin", str(bin_factor),
            "-antialias", "4",
-           "-mode", "1",
+           "-mode", "2",
            str(stack), str(binned)]
     _run(cmd, dry_run)
     return binned, base
+
+
+def _section_count(cfg: dict, stack: Path) -> int:
+    result = subprocess.run([_bin(cfg, "header"), "-size", str(stack)],
+                             capture_output=True, text=True, check=True)
+    return int(result.stdout.split()[2])
 
 
 def run_raptor(cfg: dict, binned_stack: Path, out_dir: Path, exec_path: str, dry_run: bool) -> dict:
@@ -175,12 +188,32 @@ def run_raptor(cfg: dict, binned_stack: Path, out_dir: Path, exec_path: str, dry
     warns the -diameter value must be in the pixel size of whatever stack
     -input actually points at, which here is this already-binned stack
     (matches bin_tomo.sh's own proven math, see gold_diameter_px()).
-    Returns paths to the files bin_tomo.sh moved out of RAPTOR's raptor_out/
-    {align,IMOD}/ subfolders: ali, xf, tlt, fid_txt (fiducial model,
-    confirmed from RAPTOR's man page: "IMOD folder: contains a final
-    fiducial model (*.fid.txt)")."""
+
+    Path structure matches bin_tomo.sh exactly: RAPTOR writes into a
+    scratch subfolder named just after the input stack (out_dir/<base>/,
+    same as bin_tomo.sh's RAP_PATH_OUT=${CURRENT_PATH}/${NAME_IN}), then
+    the essential files (.tlt/.xf/.fid.txt) get promoted to flat
+    <base>.tlt/.xf/.fid.txt files directly in out_dir and the scratch
+    subfolder is deleted -- same mv+rm pattern bin_tomo.sh used.
+
+    RAPTOR's own exit code is NOT reliable (confirmed empirically: it can
+    report 0 even when an internal step segfaults), so success is judged
+    by whether .tlt/.xf/.fid.txt actually exist afterward, not by the
+    return code.
+
+    GOTCHA (confirmed empirically, 2026-10-21, on a real fiducial
+    dataset): this RAPTOR build does NOT write the aligned stack (*.ali)
+    itself by default, despite its own man page saying verbosity 1
+    (default) keeps one -- and passing -rec/-thickness to have RAPTOR
+    generate it internally instead SEGFAULTS (confirmed with both -rec 0
+    and -rec 2, same crash point, exit code still reported as 0). So the
+    .ali is built here instead, from the pre-binned stack + RAPTOR's own
+    .xf, via build_aligned_stack() -- see its docstring for the real
+    reason this needs an extra step (RAPTOR's .xf can have fewer lines
+    than the input has sections, when some views get dropped during
+    robust fitting)."""
     base = binned_stack.stem
-    raptor_out = out_dir / f"{base}_raptor"
+    raptor_scratch = out_dir / base
     rc_cfg = dict(cfg.get("raptor", {}))
     diameter = rc_cfg.pop("diameter_px", None) or gold_diameter_px(cfg)
 
@@ -188,7 +221,7 @@ def run_raptor(cfg: dict, binned_stack: Path, out_dir: Path, exec_path: str, dry
            "-execPath", exec_path,
            "-path", str(binned_stack.parent),
            "-input", binned_stack.name,
-           "-output", str(raptor_out),
+           "-output", str(raptor_scratch),
            "-diameter", str(diameter),
            "-bin", "1"]
     if rc_cfg.pop("xray", False):
@@ -200,13 +233,78 @@ def run_raptor(cfg: dict, binned_stack: Path, out_dir: Path, exec_path: str, dry
     cmd += _extra_args(rc_cfg)
     _run(cmd, dry_run)
 
-    return {
-        "ali": raptor_out / "align" / f"{base}.ali",
-        "xf": raptor_out / "IMOD" / f"{base}.xf",
-        "tlt": raptor_out / "IMOD" / f"{base}.tlt",
-        "fid_txt": raptor_out / "IMOD" / f"{base}.fid.txt",
-        "base": base,
-    }
+    tlt_dst, xf_dst, fid_dst, ali_dst = (out_dir / f"{base}.tlt", out_dir / f"{base}.xf",
+                                          out_dir / f"{base}.fid.txt", out_dir / f"{base}.ali")
+    if dry_run:
+        return {"ali": ali_dst, "tlt": tlt_dst, "xf": xf_dst, "fid_txt": fid_dst, "base": base}
+
+    for name, dst in [("tlt", tlt_dst), ("xf", xf_dst), ("fid.txt", fid_dst)]:
+        src = raptor_scratch / "IMOD" / f"{base}.{name}"
+        if not src.exists():
+            raise RuntimeError(
+                f"RAPTOR did not produce {src} (its exit code is not reliable -- check "
+                f"{raptor_scratch}/align/{base}_RAPTOR.log for what actually happened)")
+        src.rename(dst)
+
+    ali_src = raptor_scratch / "align" / f"{base}.ali"
+    if ali_src.exists():
+        ali_src.rename(ali_dst)
+    else:
+        build_aligned_stack(cfg, binned_stack, xf_dst, ali_dst, dry_run)
+
+    shutil.rmtree(raptor_scratch, ignore_errors=True)
+    return {"ali": ali_dst, "tlt": tlt_dst, "xf": xf_dst, "fid_txt": fid_dst, "base": base}
+
+
+def build_aligned_stack(cfg: dict, binned_stack: Path, xf: Path, out_ali: Path, dry_run: bool) -> Path:
+    """Build the aligned stack ourselves when RAPTOR didn't write one
+    (see run_raptor()'s docstring). newstack -xform needs exactly one
+    transform line per INPUT section -- but this install's tiltalign can
+    crash partway through WRITING .xf, silently truncating it mid-line
+    (CONFIRMED on a real dataset: the raw file ended mid-number at
+    exactly a 4096-byte buffer boundary, with no trailing newline -- a
+    genuine bug in this tiltalign build, not a real "excluded views"
+    list from robust fitting as first suspected). newstack itself
+    reports the exact usable line count when this happens ("ERROR:
+    NEWSTACK - TRANSFORM LINE number out of bounds: N"), so try applying
+    -xform directly first and only fall back to trimming if that error
+    appears. Since the write always proceeds in view order from view 0,
+    a truncated write is always missing views from the END, never the
+    start -- confirmed empirically: excluding the FIRST n_drop sections
+    still failed this same bounds check, excluding the LAST n_drop
+    succeeded. Check the resulting .ali in 3dmod regardless -- this is a
+    workaround for what looks like a real bug in this specific tiltalign
+    build, not documented, guaranteed-stable behavior."""
+    if dry_run:
+        out_ali.parent.mkdir(parents=True, exist_ok=True)
+        _run([_bin(cfg, "newstack"), "-xform", str(xf), str(binned_stack), str(out_ali)], dry_run)
+        return out_ali
+
+    cmd = [_bin(cfg, "newstack"), "-xform", str(xf), str(binned_stack), str(out_ali)]
+    print("+ " + " ".join(str(c) for c in cmd))
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode == 0:
+        return out_ali
+
+    n_xf = None
+    for line in (result.stdout + result.stderr).splitlines():
+        if "out of bounds" in line:
+            n_xf = int(line.split()[-1])
+    if n_xf is None:
+        raise RuntimeError(f"newstack -xform failed for a reason other than a truncated .xf "
+                            f"(no 'out of bounds' in its output): {result.stderr}")
+
+    n_sections = _section_count(cfg, binned_stack)
+    n_drop = n_sections - n_xf
+    print(f"build_aligned_stack: {xf.name} has only {n_xf} usable transform lines but "
+          f"{binned_stack.name} has {n_sections} sections (likely a truncated .xf write -- "
+          f"see build_aligned_stack's docstring) -- excluding the last {n_drop} sections")
+    trimmed = out_ali.with_name(f"{binned_stack.stem}_trimmed.st")
+    exclude_list = ",".join(str(n_sections - 1 - i) for i in range(n_drop))
+    _run([_bin(cfg, "newstack"), "-exclude", exclude_list, str(binned_stack), str(trimmed)], dry_run)
+    _run([_bin(cfg, "newstack"), "-xform", str(xf), str(trimmed), str(out_ali)], dry_run)
+    trimmed.unlink(missing_ok=True)
+    return out_ali
 
 
 def erase_gold(cfg: dict, raptor_result: dict, out_dir: Path, dry_run: bool) -> Path:
