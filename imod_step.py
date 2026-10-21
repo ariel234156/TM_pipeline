@@ -78,12 +78,25 @@ def _env(cfg: dict):
     IMOD's bin dir. So PATH/LD_LIBRARY_PATH are always set explicitly
     here from cfg.bin_dir, the same way IMOD's own RAPTOR wrapper script
     sets LD_LIBRARY_PATH for itself -- not relying on the caller's shell
-    environment at all."""
+    environment at all.
+
+    CRITICAL (confirmed empirically, 2026-10-21): the RAPTOR wrapper
+    script itself is `"$IMOD_DIR/bin/realbin/RAPTOR" "$@"` -- it needs
+    IMOD_DIR set, not just PATH/LD_LIBRARY_PATH. This machine has
+    IMOD_DIR=/usr/local/IMOD set globally (via /etc/profile.d), which
+    Python's os.environ inherits -- so every call here was SILENTLY
+    running the OLD system RAPTOR's realbin binary even when bin_dir
+    pointed at a different (newer) install, because IMOD_DIR was never
+    overridden. This caused a confusing, wrongly-diagnosed bout of
+    "lingering flakiness" in a newer IMOD install that was actually just
+    this bug -- the install itself may be a complete fix once IMOD_DIR
+    is set correctly, which it now is."""
     bin_dir = cfg.get("bin_dir") if cfg else None
     if not bin_dir:
         return None
     imod_dir = Path(bin_dir).parent
     env = dict(os.environ)
+    env["IMOD_DIR"] = str(imod_dir)
     env["PATH"] = f"{bin_dir}:{env.get('PATH', '')}"
     env["LD_LIBRARY_PATH"] = f"{imod_dir}/qtlib:{imod_dir}/lib:{env.get('LD_LIBRARY_PATH', '')}"
     return env
