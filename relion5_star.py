@@ -12,7 +12,7 @@ Schema verified 2026-10-19 two ways:
      own .mdoc/.eer files (RELION5 5.0, installed in this environment) --
      this is RELION5's own authentic import-stage output, and is what
      revealed two things the first version of this module got wrong/
-     missing (for the aretomo_engine: 3 path):
+     missing (for the engine: aretomo3 path):
 
      a) BUG FIXED: rlnMicrographPreExposure is cumulative dose INCLUDING
         the current image (ends at this exposure), not strictly-before
@@ -31,7 +31,7 @@ Schema verified 2026-10-19 two ways:
      import's values exactly (pre-exposure, tilt axis angle, nominal
      defocus, row count all identical).
 
-GOTCHA (aretomo_engine: 3 path, confirmed empirically both from reading
+GOTCHA (engine: aretomo3 path, confirmed empirically both from reading
 AreTomo3's own files and matching real RELION5 import row order):
 AreTomo3's own _TLT.txt/_CTF.txt are sorted by TILT ANGLE, not
 acquisition order -- dose-symmetric collection schemes acquire
@@ -40,7 +40,7 @@ true acquisition order (iterating the .mdoc's [ZValue] sections), pulling
 per-image measured defocus (rlnDefocusV/rlnDefocusU) from AreTomo3's
 angle-sorted _CTF.txt by matching tilt angle.
 
-aretomo_engine: 2 (AreTomo2) path: AreTomo2 takes an already-assembled
+engine: aretomo2 (AreTomo2) path: AreTomo2 takes an already-assembled
 tilt series MRC per position and does no CTF estimation of its own, so
 there is no measured per-image defocus to draw on (unlike engine 3's
 AreTomo3 _CTF.txt). Instead this uses the companion .mdoc file's own
@@ -184,7 +184,7 @@ def _tilt_series_rows(images: list, tilt_axis_angle: float,
 
 def write_tilt_series_star(base: str, aretomo_out_dir: Path, mdoc_path: Path,
                             out_path: Path) -> dict:
-    """aretomo_engine: 3 path. Write one tilt_series/<base>.star using
+    """engine: aretomo3 path. Write one tilt_series/<base>.star using
     AreTomo3's own per-image measured defocus (_CTF.txt) paired with the
     .mdoc's acquisition-order metadata. Returns {'dfhand', 'tilt_axis_angle'}
     for the caller's top-level tomograms.star row."""
@@ -208,7 +208,7 @@ def write_tilt_series_star(base: str, aretomo_out_dir: Path, mdoc_path: Path,
 
 
 def write_tilt_series_star_from_mdoc(base: str, mdoc_path: Path, out_path: Path) -> dict:
-    """aretomo_engine: 2 path. Write one tilt_series/<base>.star using
+    """engine: aretomo2 (and imod_raptor, same mdoc-only mechanism) path. Write one tilt_series/<base>.star using
     ONLY the .mdoc's own per-image "Defocus" estimate for both
     rlnDefocusV/rlnDefocusU (no AreTomo3 CTF measurement exists for this
     path -- see module docstring). Returns {'tilt_axis_angle'} (no
@@ -227,7 +227,7 @@ def write_tilt_series_star_from_mdoc(base: str, mdoc_path: Path, out_path: Path)
 
 def write_tomograms_star(cfg: dict, aretomo_out_dir: Path, mdoc_dir: Path,
                           out_dir: Path) -> Path:
-    """aretomo_engine: 3. Write out_dir/tomograms.star plus out_dir/
+    """engine: aretomo3. Write out_dir/tomograms.star plus out_dir/
     tilt_series/<base>.star for every tilt series found in
     aretomo_out_dir (same discovery logic as organize_for_isonet2.py's
     find_candidates). cfg needs: pix_size, at_bin (list, first value
@@ -263,7 +263,7 @@ def write_tomograms_star(cfg: dict, aretomo_out_dir: Path, mdoc_dir: Path,
 
 def write_tomograms_star_aretomo2(cfg: dict, tomogram_dir: Path, mdoc_dir: Path,
                                    out_dir: Path) -> Path:
-    """aretomo_engine: 2. Write out_dir/tomograms.star plus out_dir/
+    """engine: aretomo2 (and imod_raptor, same mdoc-only mechanism). Write out_dir/tomograms.star plus out_dir/
     tilt_series/<base>.star for every *<out_suffix>.mrc tomogram in
     tomogram_dir (excluding _proj preview files, same filter as
     run_pipeline.py's organize_aretomo2_output). cfg needs: pix_size,
@@ -299,5 +299,5 @@ def write_tomograms_star_aretomo2(cfg: dict, tomogram_dir: Path, mdoc_dir: Path,
 
     out_path = out_dir / "tomograms.star"
     _write_star(out_path, "global", TOMOGRAMS_HEADER, rows)
-    print(f"relion5_star: {len(rows)} tomograms -> {out_path} (aretomo_engine: 2)")
+    print(f"relion5_star: {len(rows)} tomograms -> {out_path} (mdoc-only path)")
     return out_path

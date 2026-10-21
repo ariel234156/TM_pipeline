@@ -6,19 +6,26 @@
 # executing anything, and check it against `AreTomo3 --help` / `isonet.py
 # <subcommand> --help` on your install before a real run.
 
-# aretomo_engine picks which AreTomo you're using -- see the "aretomo2:"
-# section further down for when to use 2.
-#   3 (default): AreTomo3, from raw frames + .mdoc files -- the "aretomo:"
-#      section below. Produces EVN/ODD half-tomograms -> organize ->
-#      isonet2-n2n (noise2noise) training.
-#   2: AreTomo2, from a directory of already-assembled tilt series .mrc
-#      stacks (e.g. motion-corrected elsewhere) -- the "aretomo2:" section.
-#      One AreTomo2 call per .mrc file, no even/odd split -> isonet2's
-#      single-tomogram method instead (enable isonet.deconv in that case).
-# aretomo_engine: 3
+# engine picks which alignment engine you're using -- see the "aretomo2:"
+# and "imod:" sections further down for when to use those.
+#   "aretomo3" (default): AreTomo3, from raw frames + .mdoc files -- the
+#      "aretomo:" section below. Produces EVN/ODD half-tomograms ->
+#      organize -> isonet2-n2n (noise2noise) training.
+#   "aretomo2": AreTomo2, from a directory of already-assembled tilt
+#      series .mrc stacks (e.g. motion-corrected elsewhere) -- the
+#      "aretomo2:" section. One AreTomo2 call per .mrc file, no even/odd
+#      split -> isonet2's single-tomogram method instead (enable
+#      isonet.deconv in that case).
+#   "imod_raptor": IMOD + RAPTOR fiducial-based alignment -- the "imod:"
+#      section. A THIRD, independent engine, NOT chained through AreTomo.
+#      Needs real gold fiducial markers in the sample. Supports either raw
+#      EER frames + .mdoc (motion-corrected by IMOD's own alignframes) or
+#      pre-assembled .st/.mrc stacks, via imod.input_mode. Like aretomo2,
+#      no even/odd split -> isonet2's single-tomogram method.
+# engine: aretomo3
 
 aretomo_bin: AreTomo3      # path to the AreTomo3 binary, if not on PATH
-aretomo2_bin: AreTomo2     # path to the AreTomo2 binary, if not on PATH (only used when aretomo_engine: 2)
+aretomo2_bin: AreTomo2     # path to the AreTomo2 binary, if not on PATH (only used when engine: aretomo2)
 # isonet.py -- a bare command name like this depends on PATH at run time,
 # which depends on the right environment (conda/venv/etc.) being activated
 # in whatever shell launches run_pipeline.py. If more than one isonet.py
@@ -69,7 +76,7 @@ aretomo:
 
 # ---------------------------------------------------------------------------
 # Stage 1 ALTERNATIVE: AreTomo2 (aretomo2_step.py) -- only used when
-# aretomo_engine: 2 above. For tilt series you already have as a single
+# engine: aretomo2 above. For tilt series you already have as a single
 # assembled MRC stack per position (e.g. motion-corrected by a separate
 # tool), not raw frames + mdoc. One AreTomo2 call runs per *.mrc file
 # found in in_dir. Keys map to AreTomo2 flags via aretomo2_step.FLAG_MAP.
@@ -100,11 +107,56 @@ aretomo:
 #   #   "-CropVol": 4096 4096
 
 # ---------------------------------------------------------------------------
+# Stage 1 ALTERNATIVE: IMOD + RAPTOR fiducial-based alignment (imod_step.py)
+# -- only used when engine: imod_raptor above. A THIRD, independent engine,
+# NOT chained through AreTomo at all -- for raw EER input (input_mode: eer)
+# motion correction is done by IMOD's OWN alignframes tool, not AreTomo.
+# Needs REAL gold fiducial markers in the sample (RAPTOR can't align
+# without them).
+#
+# CAVEAT (2026-10-21, acknowledged -- not re-tested): every flag below was
+# verified against a real IMOD install's --help/man-page text and the
+# originally-working bin_tomo.sh script this is based on, but no fiducial-
+# containing dataset was available to run RAPTOR itself end-to-end when
+# this was written. Validate the first real run carefully -- see
+# imod_step.py's module docstring for the full chain and reasoning.
+# ---------------------------------------------------------------------------
+# imod:
+#   bin_dir: /usr/local/imod_5.1.0/bin
+#   input_mode: eer         # eer (raw frames + .mdoc, via alignframes) | mrc (pre-assembled .st/.mrc)
+#   in_dir: /path/to/eer_frames_or_mrc_stacks/
+#   in_suffix: .mdoc        # input_mode: eer only
+#   gain: /path/to/gain_reference.gain   # input_mode: eer only
+#   out_dir: /path/to/imod_raptor_out
+#   voltage: 300             # must be 200 or 300 (alignframes requirement)
+#   pixel_size_angstrom: 1.51
+#   bin_factor: 8            # pre-binning before RAPTOR (RAPTOR itself gets -bin 1 -- see imod_step.py)
+#   thickness_px: 512
+#   gold_diameter_nm: 10
+#   out_suffix: _final      # final tomogram filename: <base><out_suffix>.mrc (what organize/relion5_star look for)
+#   feed_variant: wbp        # which reconstruction becomes <base>_final.mrc: wbp | fake_sirt | filtered
+#   xray_removal:
+#     enabled: true          # ccderaser -find before binning (hot pixels / X-ray strikes)
+#   erase_gold:
+#     enabled: false         # remove tracked gold fiducials from the aligned stack before reconstruction
+#     # better_radius_px:    # override erase radius (px); omit to use ccderaser's own default
+#   raptor:
+#     # markers_per_image:   # omit to let RAPTOR auto-estimate (recommended to start)
+#     xray: false            # RAPTOR's own -xray: strip strong line features before marker detection
+#   reconstruction:
+#     fake_sirt_iterations: 10  # omit/0 to skip this extra reconstruction variant entirely
+#   filtered_reconstruction:
+#     enabled: false          # mtffilter low/high-pass contrast filter + a second reconstruction
+#     low_pass: [0.2, 0.05]   # [radius, sigma], fraction of Nyquist
+#     high_pass: 0.0
+#   # align_frames:           # pass-through for any extra alignframes flag (input_mode: eer only)
+#   #   dtype: 4              # e.g. dose-weighting from the .mdoc (-dtype 4 -dfile <mdoc>)
+
+# ---------------------------------------------------------------------------
 # Stage 1b (optional): generate a RELION5-compatible tomograms.star (+ one
 # tilt_series/<name>.star per tomogram), via relion5_star.py. Works for
-# EITHER engine -- which function/columns get used depends on
-# aretomo_engine above:
-#   3: built from AreTomo3's own .mdoc/_CTF.txt/_TLT.txt output (real
+# EVERY engine -- which function/columns get used depends on engine above:
+#   aretomo3: built from AreTomo3's own .mdoc/_CTF.txt/_TLT.txt output (real
 #      per-image measured defocus). mdoc_dir defaults to aretomo.in_prefix.
 #   2: built from each tomogram's companion .mdoc file alone -- AreTomo2
 #      does no CTF estimation of its own, so this uses the .mdoc's own
@@ -116,13 +168,13 @@ aretomo:
 #      pre-assembled stacks don't have one, this path has nothing to build
 #      from and skips that tomogram. mdoc_dir defaults to aretomo2.in_dir.
 # Schema verified two ways: against PyTom's own RELION5 reader
-# (pytom_tm.io.parse_relion5_star_data), and (aretomo_engine: 3 path only)
+# (pytom_tm.io.parse_relion5_star_data), and (engine: aretomo3 path only)
 # against a REAL relion_tomo_import SerialEM run -- row order, pre-
 # exposure convention, and column set all matched exactly. The
-# aretomo_engine: 2 path has NOT been cross-checked against a real RELION5
+# aretomo2/imod_raptor paths have NOT been cross-checked against a real RELION5
 # import.
 #
-# GOTCHA (aretomo_engine: 3, confirmed empirically): AreTomo3's
+# GOTCHA (engine: aretomo3, confirmed empirically): AreTomo3's
 # _TLT.txt/_CTF.txt are sorted by TILT ANGLE, not acquisition order --
 # dose-symmetric schemes acquire non-monotonically (e.g. 0, 2, -2, -4, 4,
 # ...). Dose accumulation (rlnMicrographPreExposure) is computed from the
@@ -131,20 +183,21 @@ aretomo:
 # ---------------------------------------------------------------------------
 # relion5_star:
 #   out_dir: /path/to/relion5_star_output
-#   # mdoc_dir:               # defaults to aretomo.in_prefix (engine 3) or aretomo2.in_dir (engine 2)
+#   # mdoc_dir:               # defaults to aretomo.in_prefix (aretomo3) or aretomo2.in_dir/imod.in_dir (aretomo2/imod_raptor)
 #   # optics_group_name: opticsGroup1
-#   defocus_handedness: 1    # aretomo_engine: 2 only -- no per-dataset measurement available; RELION5 itself defaults this to 1 when unknown
+#   defocus_handedness: 1    # aretomo2/imod_raptor only -- no per-dataset measurement available; RELION5 itself defaults this to 1 when unknown
 
 # ---------------------------------------------------------------------------
-# Stage 2: organize. With aretomo_engine: 3 (default), symlinks AreTomo3's
+# Stage 2: organize. With engine: aretomo3 (default), symlinks AreTomo3's
 # EVN/ODD volumes into the layout isonet2's prepare_star expects (calls
-# organize_for_isonet2.py's own functions). With aretomo_engine: 2,
-# symlinks just the real tomogram volumes from aretomo2.out_dir into
-# out_dir below, filtering out AreTomo2's .aln/preview-projection files
-# (see organize_aretomo2_output() in run_pipeline.py) -- the rest of this
+# organize_for_isonet2.py's own functions). With engine: aretomo2 or
+# imod_raptor, symlinks just the real tomogram volumes from
+# aretomo2.out_dir/imod.out_dir into out_dir below, filtering out each
+# engine's own auxiliary files via its out_suffix (see
+# organize_aretomo2_output() in run_pipeline.py) -- the rest of this
 # section (raw_pixel_size/bin_factor/defocus_source/copy) is ignored in
 # that case; pixel_size is instead computed from aretomo2.pix_size *
-# aretomo2.out_bin.
+# aretomo2.out_bin or imod.pixel_size_angstrom * imod.bin_factor.
 # ---------------------------------------------------------------------------
 organize:
   out_dir: /mnt/cryonas02/Users/Gabriel_Frank/Ariel_Cohen/test_ferr/isonet2_input
@@ -181,7 +234,7 @@ isonet:
     # aretomo/organize stages above -- do not set them here.
 
   deconv:
-    # With aretomo_engine: 3 (default), organize/prepare_star only ever
+    # With engine: aretomo3 (default), organize/prepare_star only ever
     # produce EVN/ODD half-tomograms (no full tomogram), so rlnTomoName
     # stays None and deconv's default --input_column rlnTomoName would
     # crash trying to open "None". It also wouldn't help even if
@@ -190,11 +243,11 @@ isonet:
     # rlnDeconvTomoName entirely (see IsoNet/models/data_sequence.py
     # _load_statistics_and_mask). Leave disabled in that case.
     #
-    # With aretomo_engine: 2 (AreTomo2, full tomograms, no even/odd split
-    # -- see the aretomo2: section), rlnTomoName IS populated, deconv
-    # works normally, and it's the recommended way to get CTF deconvolution
-    # for isonet2's single-tomogram method (set isonet.refine.method:
-    # isonet2 too in that case) -- set enabled: true.
+    # With engine: aretomo2 or imod_raptor (full tomograms, no even/odd
+    # split -- see the aretomo2:/imod: sections), rlnTomoName IS populated,
+    # deconv works normally, and it's the recommended way to get CTF
+    # deconvolution for isonet2's single-tomogram method (set
+    # isonet.refine.method: isonet2 too in that case) -- set enabled: true.
     enabled: false
     deconvstrength: 1.0
     snrfalloff: 1.0
@@ -213,16 +266,16 @@ isonet:
   refine:
     # top_ctf_n (optional, run_pipeline.py-only key -- not an isonet.py flag):
     # cap training to just N tomograms, to cut refine's runtime. Selection
-    # depends on aretomo_engine:
-    #   3: the N tilt series with the highest CTF cross-correlation score
-    #      (column 6 of AreTomo3's *_CTF.txt, at the near-zero-tilt image --
-    #      see organize_for_isonet2.py's parse_ctf_score_near_zero). Scores
-    #      are written to <organize.out_dir>/ctf_scores.csv by the organize
-    #      stage, so organize must have run at least once first.
-    #   2: AreTomo2 does no CTF estimation of its own -- no ctf_scores.csv
-    #      to rank by -- so run_pipeline.py just takes the first N
-    #      tomograms in star-file order instead (see
-    #      select_first_n_indices()), not a quality-ranked selection.
+    # depends on engine:
+    #   aretomo3: the N tilt series with the highest CTF cross-correlation
+    #      score (column 6 of AreTomo3's *_CTF.txt, at the near-zero-tilt
+    #      image -- see organize_for_isonet2.py's parse_ctf_score_near_zero).
+    #      Scores are written to <organize.out_dir>/ctf_scores.csv by the
+    #      organize stage, so organize must have run at least once first.
+    #   aretomo2 / imod_raptor: neither does AreTomo3-style CTF estimation
+    #      of its own -- no ctf_scores.csv to rank by -- so run_pipeline.py
+    #      just takes the first N tomograms in star-file order instead
+    #      (see select_first_n_indices()), not a quality-ranked selection.
     # Either way, isonet.py's refine has no --tomo_idx of its own (unlike
     # deconv/make_mask/predict), so run_pipeline.py writes a filtered copy
     # of the star file (<star_name>_top_ctf.star, same directory)

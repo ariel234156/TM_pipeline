@@ -35,26 +35,35 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs
 
-# (dotted_path, label, kind) -- kind is one of:
-#   str, path, int, float, bool, intlist, str_or_null
+# (dotted_path, label, kind) or (dotted_path, label, kind, options) -- kind
+# is one of: str, path, int, float, bool, intlist, str_or_null, select
+# (options required for select: a list of (value, display_label) pairs).
+#
+# SECTIONS entries are (title, fields, engine_filter) -- engine_filter is
+# None for a section that's always shown, or one of "aretomo3" / "aretomo2"
+# / "imod_raptor" for a section the page only shows while the top-level
+# "engine" field is set to that value (see render_form's <script> for the
+# show/hide logic).
 SECTIONS = [
-    ("Binaries", [
-        ("aretomo_engine", "AreTomo engine (3=AreTomo3 | 2=AreTomo2)", "int"),
-        ("aretomo_bin", "AreTomo3 binary", "str"),
-        ("aretomo2_bin", "AreTomo2 binary (only used when engine=2)", "str"),
+    ("Engine selection", [
+        ("engine", "Alignment engine", "select",
+         [("aretomo3", "AreTomo3 (raw frames + .mdoc)"),
+          ("aretomo2", "AreTomo2 (pre-assembled tilt series .mrc)"),
+          ("imod_raptor", "IMOD + RAPTOR (fiducial-based)")]),
         # isonet_bin is deliberately NOT editable here: it can be either a
         # plain string or a [python_path, script_path] list (see the
         # comment above it in the YAML), and this editor's "str" kind
         # would corrupt a list value by quoting its Python repr on save.
         # Edit it by hand.
-    ]),
+    ], None),
     ("AreTomo3 -- raw paths", [
+        ("aretomo_bin", "AreTomo3 binary", "str"),
         ("aretomo.in_prefix", "Input frames/mdoc dir", "path"),
         ("aretomo.out_dir", "Output dir", "path"),
         ("aretomo.tmp_dir", "Temp dir", "path"),
         ("aretomo.log_dir", "Log dir", "path"),
         ("aretomo.gain", "Gain reference file", "path"),
-    ]),
+    ], "aretomo3"),
     ("AreTomo3 -- parameters", [
         ("aretomo.in_suffix", "Input suffix", "str"),
         ("aretomo.in_skips", "Skip marker", "str"),
@@ -78,8 +87,9 @@ SECTIONS = [
         ("aretomo.split_sum", "Split odd/even sums", "int"),
         ("aretomo.resume", "Resume", "int"),
         ("aretomo.gpu", "GPU IDs", "intlist"),
-    ]),
-    ("AreTomo2 (alternative engine -- only used when aretomo_engine=2)", [
+    ], "aretomo3"),
+    ("AreTomo2 (pre-assembled tilt series .mrc)", [
+        ("aretomo2_bin", "AreTomo2 binary", "str"),
         ("aretomo2.in_dir", "Input dir (pre-assembled tilt series .mrc)", "path"),
         ("aretomo2.out_dir", "Output dir", "path"),
         ("aretomo2.out_suffix", "Output filename suffix", "str"),
@@ -96,21 +106,47 @@ SECTIONS = [
         ("aretomo2.wbp", "WBP reconstruction", "int"),
         ("aretomo2.patch", "Local alignment patches (x y)", "intlist"),
         ("aretomo2.gpu", "GPU IDs", "intlist"),
-    ]),
-    ("Organize (AreTomo3 -> IsoNet2 layout)", [
-        ("organize.out_dir", "Organized EVN/ODD output dir", "path"),
-        ("organize.raw_pixel_size", "Raw pixel size (A)", "float"),
-        ("organize.bin_factor", "Bin factor (must match aretomo.at_bin[0])", "float"),
-        ("organize.defocus_source", "Defocus source (ctf | none)", "str"),
+    ], "aretomo2"),
+    ("IMOD + RAPTOR -- raw paths / input", [
+        ("imod.bin_dir", "IMOD bin/ dir (e.g. /usr/local/imod_5.1.0/bin)", "path"),
+        ("imod.input_mode", "Input mode", "select",
+         [("eer", "eer (raw EER frames + .mdoc, via alignframes)"),
+          ("mrc", "mrc (pre-assembled tilt series .st/.mrc)")]),
+        ("imod.in_dir", "Input dir (EER frames+.mdoc, or .mrc stacks if input_mode=mrc)", "path"),
+        ("imod.in_suffix", "Input suffix (input_mode=eer)", "str"),
+        ("imod.gain", "Gain reference file (input_mode=eer)", "path"),
+        ("imod.out_dir", "Output dir", "path"),
+    ], "imod_raptor"),
+    ("IMOD + RAPTOR -- parameters", [
+        ("imod.voltage", "Voltage (kV, 200 or 300 only)", "int"),
+        ("imod.pixel_size_angstrom", "Raw pixel size (A)", "float"),
+        ("imod.bin_factor", "Bin factor before RAPTOR", "int"),
+        ("imod.thickness_px", "Reconstructed tomogram thickness (px)", "int"),
+        ("imod.gold_diameter_nm", "Gold fiducial diameter (nm)", "float"),
+        ("imod.out_suffix", "Final tomogram filename suffix", "str"),
+        ("imod.feed_variant", "Variant fed downstream (wbp | fake_sirt | filtered)", "str"),
+        ("imod.xray_removal.enabled", "Remove X-rays/hot pixels (ccderaser) before binning", "bool"),
+        ("imod.erase_gold.enabled", "Erase gold fiducials after alignment (before reconstruction)", "bool"),
+        ("imod.erase_gold.better_radius_px", "Gold erase radius override (px, blank=default)", "str_or_null"),
+        ("imod.raptor.markers_per_image", "Markers to track per image (blank=auto-estimate)", "str_or_null"),
+        ("imod.raptor.xray", "RAPTOR: remove strong line features before tracking", "bool"),
+        ("imod.reconstruction.fake_sirt_iterations", "FakeSIRT iterations (blank=skip this variant)", "str_or_null"),
+        ("imod.filtered_reconstruction.enabled", "Also reconstruct an mtffilter-filtered variant", "bool"),
+    ], "imod_raptor"),
+    ("Organize (-> IsoNet2 layout)", [
+        ("organize.out_dir", "Organized tomogram output dir", "path"),
+        ("organize.raw_pixel_size", "Raw pixel size (A) -- aretomo3 only", "float"),
+        ("organize.bin_factor", "Bin factor -- aretomo3 only, must match aretomo.at_bin[0]", "float"),
+        ("organize.defocus_source", "Defocus source (ctf | none) -- aretomo3 only", "str"),
         ("organize.copy", "Copy instead of symlink", "bool"),
-    ]),
+    ], None),
     ("IsoNet2 -- prepare_star", [
         ("isonet.prepare_star.star_name", "Star filename", "str"),
         ("isonet.prepare_star.voltage", "Voltage (kV)", "float"),
         ("isonet.prepare_star.ac", "Amplitude contrast", "float"),
         ("isonet.prepare_star.tilt_min", "Tilt min", "float"),
         ("isonet.prepare_star.tilt_max", "Tilt max", "float"),
-    ]),
+    ], None),
     ("IsoNet2 -- deconv (usually disabled for even/odd data -- see comment in file)", [
         ("isonet.deconv.enabled", "Enabled", "bool"),
         ("isonet.deconv.deconvstrength", "Deconv strength", "float"),
@@ -119,14 +155,14 @@ SECTIONS = [
         ("isonet.deconv.phaseflipped", "Phase-flipped input", "bool"),
         ("isonet.deconv.ncpus", "CPUs", "int"),
         ("isonet.deconv.output_dir", "Output dir", "str"),
-    ]),
+    ], None),
     ("IsoNet2 -- make_mask", [
         ("isonet.make_mask.density_percentage", "Density percentage", "int"),
         ("isonet.make_mask.std_percentage", "Std percentage", "int"),
         ("isonet.make_mask.patch_size", "Patch size", "int"),
         ("isonet.make_mask.z_crop", "Z crop fraction", "float"),
         ("isonet.make_mask.output_dir", "Output dir", "str"),
-    ]),
+    ], None),
     ("IsoNet2 -- refine", [
         ("isonet.refine.method", "Method (isonet2 | isonet2-n2n)", "str"),
         ("isonet.refine.arch", "Architecture", "str"),
@@ -143,18 +179,18 @@ SECTIONS = [
         ("isonet.refine.ncpus", "CPUs", "int"),
         ("isonet.refine.save_interval", "Save interval (epochs must be a multiple of this)", "int"),
         ("isonet.refine.output_dir", "Output dir", "str"),
-    ]),
+    ], None),
     ("IsoNet2 -- predict", [
         ("isonet.predict.apply_mw_x1", "Apply missing-wedge mask", "bool"),
         ("isonet.predict.isCTFflipped", "Input already phase-flipped", "bool"),
         ("isonet.predict.padding_factor", "Padding factor", "float"),
         ("isonet.predict.gpuID", "GPU IDs", "str"),
         ("isonet.predict.output_dir", "Output dir", "str"),
-    ]),
-    ("RELION5 star export (optional, works with either aretomo_engine)", [
+    ], None),
+    ("RELION5 star export (optional, works with any engine)", [
         ("relion5_star.out_dir", "Output dir", "path"),
-        ("relion5_star.defocus_handedness", "Defocus handedness (aretomo_engine: 2 only)", "int"),
-    ]),
+        ("relion5_star.defocus_handedness", "Defocus handedness (aretomo2/imod_raptor only)", "int"),
+    ], None),
     ("PyTom -- template matching (optional)", [
         ("pytom.bin_dir", "pytom_tm conda env's bin/ dir", "path"),
         ("pytom.reference_map", "Reference density map (MRC)", "path"),
@@ -166,7 +202,7 @@ SECTIONS = [
         ("pytom.match_template.tilt_angles", "Tilt angles (min max)", "intlist"),
         ("pytom.extract_candidates.number_of_particles", "Max particles to extract per tomogram", "int"),
         ("pytom.extract_candidates.relion5-compat", "RELION5-compatible coordinates (particles.star)", "bool"),
-    ]),
+    ], None),
 ]
 
 KEY_RE = re.compile(r'^(?P<indent>[ \t]*)(?P<key>"[^"]+"|[A-Za-z0-9_.\-]+):(?P<rest>.*)$')
@@ -252,25 +288,28 @@ body{font-family:-apple-system,Segoe UI,sans-serif;max-width:900px;margin:2rem a
 h1{font-size:1.4rem} h2{font-size:1.05rem;margin-top:2rem;border-bottom:1px solid #ddd;padding-bottom:.3rem}
 .field{display:flex;align-items:center;gap:.75rem;margin:.4rem 0}
 .field label{flex:0 0 380px;font-size:.88rem;color:#333}
-.field input[type=text]{flex:1;padding:.3rem .5rem;font-family:ui-monospace,monospace;font-size:.85rem}
+.field input[type=text],.field select{flex:1;padding:.3rem .5rem;font-family:ui-monospace,monospace;font-size:.85rem}
 .field input[type=checkbox]{width:1.1rem;height:1.1rem}
 .msg{padding:.6rem 1rem;border-radius:6px;margin:1rem 0}
 .msg.ok{background:#e2f4e2;color:#175417}
 .msg.err{background:#fbe2e2;color:#7a1414}
 button{padding:.6rem 1.4rem;font-size:.95rem;margin-top:1.5rem;cursor:pointer}
 .note{color:#666;font-size:.8rem;margin-top:.3rem}
+section[hidden]{display:none}
 </style></head><body>
-<h1>AreTomo3 / IsoNet2 pipeline config</h1>
-<p class="note">Editing this file's fields directly -- comments and structure are preserved. Advanced/commented-out options (predict.model, refine.pretrained_model, the aretomo "extra:" block, etc.) still need a manual edit.</p>
+<h1>AreTomo3 / AreTomo2 / IMOD+RAPTOR / IsoNet2 pipeline config</h1>
+<p class="note">Editing this file's fields directly -- comments and structure are preserved. Advanced/commented-out options (predict.model, refine.pretrained_model, the aretomo "extra:" block, etc.) still need a manual edit. Sections for the two engines you didn't pick above are hidden, not deleted -- their values stay in the file untouched.</p>
 """]
     if message:
         parts.append(f'<div class="msg ok">{html.escape(message)}</div>')
     if error:
         parts.append(f'<div class="msg err">{html.escape(error)}</div>')
     parts.append('<form method="post" action="/save">')
-    for section_title, fields in SECTIONS:
-        parts.append(f"<h2>{html.escape(section_title)}</h2>")
-        for path, label, kind in fields:
+    for section_title, fields, engine_filter in SECTIONS:
+        attr = f' data-engine="{html.escape(engine_filter)}"' if engine_filter else ""
+        parts.append(f"<section{attr}><h2>{html.escape(section_title)}</h2>")
+        for field in fields:
+            path, label, kind = field[0], field[1], field[2]
             value = get_by_path(cfg, path)
             name = html.escape(path)
             lbl = html.escape(label)
@@ -280,20 +319,46 @@ button{padding:.6rem 1.4rem;font-size:.95rem;margin-top:1.5rem;cursor:pointer}
                     f'<div class="field"><label for="{name}">{lbl}</label>'
                     f'<input type="checkbox" id="{name}" name="{name}" {checked}></div>'
                 )
+            elif kind == "select":
+                options = field[3]
+                opts_html = "".join(
+                    f'<option value="{html.escape(v)}"'
+                    f'{" selected" if str(value) == v else ""}>{html.escape(lbl_opt)}</option>'
+                    for v, lbl_opt in options
+                )
+                parts.append(
+                    f'<div class="field"><label for="{name}">{lbl}</label>'
+                    f'<select id="{name}" name="{name}">{opts_html}</select></div>'
+                )
             else:
                 val = html.escape(display_value(kind, value))
                 parts.append(
                     f'<div class="field"><label for="{name}">{lbl}</label>'
                     f'<input type="text" id="{name}" name="{name}" value="{val}"></div>'
                 )
-    parts.append('<button type="submit">Save to pipeline_config.yaml</button></form></body></html>')
+        parts.append("</section>")
+    parts.append('<button type="submit">Save to pipeline_config.yaml</button></form>')
+    parts.append("""<script>
+(function(){
+  var sel = document.getElementById("engine");
+  if (!sel) return;
+  function apply(){
+    var chosen = sel.value;
+    document.querySelectorAll("section[data-engine]").forEach(function(s){
+      s.hidden = s.getAttribute("data-engine") !== chosen;
+    });
+  }
+  sel.addEventListener("change", apply);
+  apply();
+})();
+</script></body></html>""")
     return "".join(parts)
 
 
 def all_fields():
-    for _, fields in SECTIONS:
-        for path, label, kind in fields:
-            yield path, label, kind
+    for _, fields, _ in SECTIONS:
+        for field in fields:
+            yield field[0], field[1], field[2]
 
 
 def apply_updates(config_path: Path, form: dict) -> None:

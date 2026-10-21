@@ -1,19 +1,27 @@
 #!/usr/bin/env python3
 """
-End-to-end cryo-ET pipeline: raw tilt series -> AreTomo align+reconstruct ->
+End-to-end cryo-ET pipeline: raw tilt series -> align+reconstruct ->
 organize/prepare_star -> IsoNet2 deconv/make_mask/refine/predict denoising.
 
-Two AreTomo engines are supported, set via the config's top-level
-"aretomo_engine" key:
-  3 (default): AreTomo3, from raw frames + .mdoc files, producing EVN/ODD
-     half-tomograms -> organize_for_isonet2 even/odd layout -> IsoNet2's
-     isonet2-n2n (noise2noise) method.
-  2: AreTomo2 (aretomo2_step.py), from a directory of already-assembled
-     tilt series .mrc stacks (one file per tilt series, e.g. produced by
-     a separate motion-correction tool), one AreTomo2 call per file, no
-     even/odd split -> prepare_star --full directly on AreTomo2's output
-     dir -> IsoNet2's single-tomogram isonet2 method (with deconv enabled,
-     since there's no even/odd split to feed isonet2-n2n otherwise).
+Three alignment engines are supported, set via the config's top-level
+"engine" key:
+  "aretomo3" (default): AreTomo3, from raw frames + .mdoc files, producing
+     EVN/ODD half-tomograms -> organize_for_isonet2 even/odd layout ->
+     IsoNet2's isonet2-n2n (noise2noise) method.
+  "aretomo2": AreTomo2 (aretomo2_step.py), from a directory of already-
+     assembled tilt series .mrc stacks (one file per tilt series, e.g.
+     produced by a separate motion-correction tool), one AreTomo2 call
+     per file, no even/odd split -> prepare_star --full directly on
+     AreTomo2's output dir -> IsoNet2's single-tomogram isonet2 method
+     (with deconv enabled, since there's no even/odd split to feed
+     isonet2-n2n otherwise).
+  "imod_raptor": IMOD + RAPTOR fiducial-based alignment (imod_step.py), a
+     THIRD, independent engine -- NOT chained through AreTomo. Runs the
+     imod_align and imod_reconstruct stages instead of "aretomo". Supports
+     either raw EER frames + .mdoc (motion-corrected by IMOD's own
+     alignframes, not AreTomo) or a directory of pre-assembled tilt series
+     .st/.mrc stacks, selected by imod.input_mode. Like aretomo2, no
+     even/odd split -> IsoNet2's single-tomogram isonet2 method.
 
 Usage:
     python3 run_pipeline.py --config pipeline_config.yaml
@@ -21,17 +29,19 @@ Usage:
     python3 run_pipeline.py --config pipeline_config.yaml --start-from refine
     python3 run_pipeline.py --config pipeline_config.yaml --stop-after deconv
 
-Every tunable AreTomo3/AreTomo2 and IsoNet2 parameter lives in the YAML
-config (copy pipeline_config.example.yaml and edit it) -- this script only
-decides what order stages run in and wires each stage's output into the
-next stage's input. It calls the AreTomo3/AreTomo2 binary and the isonet2
-project's isonet.py CLI; all must be on PATH (or point at them with
-config "isonet_bin" / "aretomo_bin" / "aretomo2_bin").
+Every tunable AreTomo3/AreTomo2/IMOD+RAPTOR and IsoNet2 parameter lives in
+the YAML config (copy pipeline_config.example.yaml and edit it) -- this
+script only decides what order stages run in and wires each stage's output
+into the next stage's input. It calls the AreTomo3/AreTomo2/IMOD binaries
+and the isonet2 project's isonet.py CLI; all must be on PATH (or point at
+them with config "isonet_bin" / "aretomo_bin" / "aretomo2_bin" /
+"imod.bin_dir").
 
 Requires PyYAML (`pip install pyyaml`).
 """
 import argparse
 import csv
+import json
 import os
 import sys
 import time
@@ -41,13 +51,15 @@ import yaml
 
 import aretomo_step
 import aretomo2_step
+import imod_step
 import isonet2_steps
 import organize_for_isonet2 as prep
 import pytom_step
 import relion5_star
 
-STAGES = ["aretomo", "relion5_star", "organize", "prepare_star", "deconv", "make_mask",
-          "refine", "predict", "tm_template", "tm_mask", "tm_match", "tm_extract", "tm_merge"]
+STAGES = ["aretomo", "imod_align", "imod_reconstruct", "relion5_star", "organize",
+          "prepare_star", "deconv", "make_mask", "refine", "predict",
+          "tm_template", "tm_mask", "tm_match", "tm_extract", "tm_merge"]
 
 
 def log_run_params(cfg: dict, config_path: Path) -> Path:
@@ -171,6 +183,126 @@ def organize_aretomo2_output(aretomo2_out_dir: Path, clean_dir: Path, suffix: st
     return clean_dir
 
 
+def _find_imod_inputs(cfg: dict) -> list:
+    """engine: imod_raptor. Returns a list of (mode, path) for every tilt
+    series to process -- mode is 'eer' (path is a .mdoc file) or 'mrc'
+    (path is a pre-assembled .st/.mrc stack), per imod.input_mode."""
+    mode = cfg.get("input_mode", "eer")
+    if mode == "eer":
+        suffix = cfg.get("in_suffix", ".mdoc")
+        return [("eer", p) for p in sorted(Path(cfg["in_dir"]).glob(f"*{suffix}"))]
+    mrc_dir = Path(cfg.get("mrc_dir", cfg.get("in_dir")))
+    paths = sorted(mrc_dir.glob("*.st")) + sorted(mrc_dir.glob("*.mrc"))
+    return [("mrc", p) for p in paths]
+
+
+def run_imod_align(cfg: dict, dry_run: bool) -> Path:
+    """engine: imod_raptor, imod_align stage: for each tilt series,
+    assemble (EER mode, via imod_step.align_frames_eer -- IMOD's own
+    alignframes, NOT AreTomo) or use directly (mrc mode) -> extracttilts
+    -> optional x-ray removal -> bin+normalize -> RAPTOR -> optional gold
+    erasure. Persists a manifest (ali/tlt path per tilt series) to disk so
+    a later separate `--start-from imod_reconstruct` invocation can pick
+    up without re-running RAPTOR."""
+    out_dir = Path(cfg["out_dir"])
+    out_dir.mkdir(parents=True, exist_ok=True)
+    inputs = _find_imod_inputs(cfg)
+    if not inputs:
+        raise RuntimeError(
+            f"no tilt series found for imod_align (input_mode={cfg.get('input_mode', 'eer')})")
+
+    manifest = {}
+    for mode, path in inputs:
+        if dry_run:
+            print(f"+ [dry-run] would process {path} (mode={mode}) through "
+                  f"alignframes/extracttilts/ccderaser/newstack/RAPTOR")
+            base = path.stem
+            manifest[base] = {"ali": str(out_dir / f"{base}_PLACEHOLDER.ali"),
+                               "tlt": str(out_dir / f"{base}_PLACEHOLDER.tlt"),
+                               "base": base}
+            continue
+
+        if mode == "eer":
+            stack, base = imod_step.align_frames_eer(cfg, path, out_dir, dry_run)
+        else:
+            stack, base = path, path.stem
+
+        rawtlt = out_dir / f"{base}_bin{cfg['bin_factor']}.rawtlt"
+        imod_step.extract_rawtlt(cfg, stack, rawtlt, dry_run)
+
+        if cfg.get("xray_removal", {}).get("enabled", True):
+            stack_for_bin = imod_step.erase_xrays(cfg, stack, out_dir, dry_run)
+        else:
+            stack_for_bin = stack
+
+        binned, _ = imod_step.bin_and_normalize(cfg, stack_for_bin, out_dir, dry_run)
+        raptor_result = imod_step.run_raptor(
+            cfg, binned, out_dir, exec_path=str(cfg["bin_dir"]), dry_run=dry_run)
+
+        if cfg.get("erase_gold", {}).get("enabled", False):
+            ali = imod_step.erase_gold(cfg, raptor_result, out_dir, dry_run)
+        else:
+            ali = raptor_result["ali"]
+
+        manifest[base] = {"ali": str(ali), "tlt": str(raptor_result["tlt"]), "base": base}
+
+    manifest_path = out_dir / "imod_align_manifest.json"
+    manifest_path.write_text(json.dumps(manifest, indent=2))
+    print(f"imod_align: {len(manifest)} tilt series aligned -> {out_dir} "
+          f"(manifest: {manifest_path})")
+    return out_dir
+
+
+def run_imod_reconstruct(cfg: dict, dry_run: bool) -> Path:
+    """engine: imod_raptor, imod_reconstruct stage: WBP reconstruction
+    (always) + optional FakeSIRT and mtffilter-filtered reconstructions,
+    for every tilt series in imod_align's manifest. Whichever variant
+    imod.feed_variant names (default 'wbp') is symlinked to
+    <base><imod.out_suffix>.mrc -- the predictable name organize/
+    relion5_star look for (same mechanism as AreTomo2's out_suffix)."""
+    out_dir = Path(cfg["out_dir"])
+    manifest_path = out_dir / "imod_align_manifest.json"
+    final_suffix = cfg.get("out_suffix", "_final")
+
+    if dry_run and not manifest_path.exists():
+        print(f"+ [dry-run] would read {manifest_path} and reconstruct each tilt series "
+              f"(run imod_align first for a real manifest)")
+        return out_dir
+
+    manifest = json.loads(manifest_path.read_text())
+    feed_variant = cfg.get("feed_variant", "wbp")
+    rec_cfg = cfg.get("reconstruction", {})
+    flt_cfg = cfg.get("filtered_reconstruction", {})
+
+    for base, entry in manifest.items():
+        ali, tlt = Path(entry["ali"]), Path(entry["tlt"])
+        chosen = imod_step.reconstruct(cfg, ali, tlt, out_dir, suffix="", dry_run=dry_run)
+
+        fake_sirt = rec_cfg.get("fake_sirt_iterations")
+        if fake_sirt:
+            fs_path = imod_step.reconstruct(
+                cfg, ali, tlt, out_dir, suffix=f"_FS{fake_sirt}", dry_run=dry_run)
+            if feed_variant == "fake_sirt":
+                chosen = fs_path
+
+        if flt_cfg.get("enabled", False):
+            flt_path = imod_step.filtered_reconstruct(cfg, ali, tlt, out_dir, dry_run=dry_run)
+            if feed_variant == "filtered":
+                chosen = flt_path
+
+        final_path = out_dir / f"{base}{final_suffix}.mrc"
+        if dry_run:
+            print(f"+ [dry-run] would symlink {chosen} -> {final_path}")
+        else:
+            if final_path.exists() or final_path.is_symlink():
+                final_path.unlink()
+            os.symlink(chosen.resolve(), final_path)
+
+    print(f"imod_reconstruct: {len(manifest)} tomograms -> {out_dir} "
+          f"(feed variant: {feed_variant}{final_suffix}.mrc)")
+    return out_dir
+
+
 def select_top_ctf_indices(organize_out_dir, n: int) -> set:
     """Read the ctf_scores.csv written by run_organize() and return the
     1-based rlnIndex values (matching the star file's row numbering) of
@@ -196,12 +328,13 @@ def select_top_ctf_indices(organize_out_dir, n: int) -> set:
 
 
 def select_first_n_indices(star_file: Path, n: int) -> set:
-    """aretomo_engine: 2 fallback for isonet.refine.top_ctf_n: AreTomo2 does
-    no CTF estimation of its own, so there is no ctf_scores.csv to rank by
-    (unlike the aretomo_engine: 3 path -- see select_top_ctf_indices). Just
-    takes the first n data rows in star-file order (the order
-    organize_aretomo2_output() symlinked tomograms in, i.e. sorted
-    filename order) instead of ranking by any quality metric."""
+    """engine: aretomo2/imod_raptor fallback for isonet.refine.top_ctf_n:
+    neither engine does AreTomo3-style CTF estimation of its own, so there
+    is no ctf_scores.csv to rank by (unlike the engine: aretomo3 path --
+    see select_top_ctf_indices). Just takes the first n data rows in
+    star-file order (the order organize_aretomo2_output() symlinked
+    tomograms in, i.e. sorted filename order) instead of ranking by any
+    quality metric."""
     indices = []
     for line in Path(star_file).read_text().splitlines():
         first_token = line.split(None, 1)[0] if line.split() else None
@@ -260,18 +393,22 @@ def main():
     def active(stage):
         return start_idx <= STAGES.index(stage) <= stop_idx
 
-    aretomo_engine = cfg.get("aretomo_engine", 3)
+    engine = cfg.get("engine", "aretomo3")
     organize_cfg = cfg.get("organize", {})
     isonet_cfg = cfg.get("isonet", {})
     isonet_bin = cfg.get("isonet_bin", "isonet.py")
     aretomo_bin = cfg.get("aretomo_bin", "AreTomo3")
     aretomo2_bin = cfg.get("aretomo2_bin", "AreTomo2")
 
-    # organize.out_dir doubles as where the star file lives, for both
-    # engines -- for engine 2 it's where the clean (symlinked, aux-file-
-    # free) tomogram directory goes (see organize_aretomo2_output()).
-    aretomo_out_dir = Path(
-        cfg["aretomo2"]["out_dir"] if aretomo_engine == 2 else cfg["aretomo"]["out_dir"])
+    # organize.out_dir doubles as where the star file lives, for every
+    # engine -- for aretomo2/imod_raptor it's where the clean (symlinked,
+    # aux-file-free) tomogram directory goes (see
+    # organize_aretomo2_output(), reused as-is for imod_raptor too).
+    _out_dir_by_engine = {
+        "aretomo2": lambda: cfg["aretomo2"]["out_dir"],
+        "imod_raptor": lambda: cfg["imod"]["out_dir"],
+    }
+    aretomo_out_dir = Path(_out_dir_by_engine.get(engine, lambda: cfg["aretomo"]["out_dir"])())
     evn_dir = odd_dir = full_dir = None
     pixel_size = None
     defocus_list = None
@@ -280,27 +417,51 @@ def main():
     star_file = Path(organize_cfg.get("out_dir", ".")) / star_name
 
     if active("aretomo"):
-        if aretomo_engine == 2:
+        if engine == "aretomo2":
             aretomo_out_dir = aretomo2_step.run_aretomo2_batch(
                 cfg["aretomo2"], binary=aretomo2_bin, dry_run=args.dry_run)
-        else:
+        elif engine == "aretomo3":
             aretomo_out_dir = aretomo_step.run_aretomo3(
                 cfg["aretomo"], binary=aretomo_bin, dry_run=args.dry_run)
 
+    if active("imod_align") and engine == "imod_raptor":
+        aretomo_out_dir = run_imod_align(cfg["imod"], args.dry_run)
+
+    if active("imod_reconstruct") and engine == "imod_raptor":
+        aretomo_out_dir = run_imod_reconstruct(cfg["imod"], args.dry_run)
+
     if active("relion5_star"):
         # Optional: generate a RELION5-compatible tomograms.star (+ one
-        # tilt_series/<name>.star per tomogram). Both engines need a
-        # companion .mdoc per tomogram -- AreTomo2's input stacks must
-        # have one sitting next to them for this to work (see
+        # tilt_series/<name>.star per tomogram). Every engine needs a
+        # companion .mdoc per tomogram -- aretomo2/imod_raptor's input
+        # stacks must have one sitting next to them for this to work (see
         # relion5_star.py's module docstring).
         r5_cfg = cfg.get("relion5_star", {})
-        if aretomo_engine == 2:
+        if engine == "imod_raptor":
+            im_cfg = cfg.get("imod", {})
+            r5_out_dir = Path(r5_cfg.get("out_dir", Path(im_cfg["out_dir"]) / "relion5"))
+            mdoc_dir = Path(r5_cfg.get("mdoc_dir", im_cfg.get("in_dir", im_cfg.get("mrc_dir"))))
+            if args.dry_run:
+                print(f"+ [dry-run] would write {r5_out_dir}/tomograms.star "
+                      f"from {aretomo_out_dir} / {mdoc_dir} (engine: imod_raptor)")
+            else:
+                relion5_star.write_tomograms_star_aretomo2(
+                    {"pix_size": im_cfg["pixel_size_angstrom"],
+                     "out_bin": im_cfg["bin_factor"],
+                     "amp_contrast": im_cfg.get("amp_contrast", 0.07),
+                     "kv": im_cfg.get("voltage", 300),
+                     "cs": im_cfg.get("cs", 2.7),
+                     "out_suffix": im_cfg.get("out_suffix", "_final"),
+                     "optics_group_name": r5_cfg.get("optics_group_name", "opticsGroup1"),
+                     "defocus_handedness": r5_cfg.get("defocus_handedness", 1)},
+                    aretomo_out_dir, mdoc_dir, r5_out_dir)
+        elif engine == "aretomo2":
             a2_cfg = cfg.get("aretomo2", {})
             r5_out_dir = Path(r5_cfg.get("out_dir", Path(a2_cfg["out_dir"]) / "relion5"))
             mdoc_dir = Path(r5_cfg.get("mdoc_dir", a2_cfg["in_dir"]))
             if args.dry_run:
                 print(f"+ [dry-run] would write {r5_out_dir}/tomograms.star "
-                      f"from {aretomo_out_dir} / {mdoc_dir} (aretomo_engine: 2)")
+                      f"from {aretomo_out_dir} / {mdoc_dir} (engine: aretomo2)")
             else:
                 relion5_star.write_tomograms_star_aretomo2(
                     {"pix_size": a2_cfg["pix_size"],
@@ -329,28 +490,34 @@ def main():
                     aretomo_out_dir, mdoc_dir, r5_out_dir)
 
     if active("organize"):
-        if aretomo_engine == 2:
-            # AreTomo2 produces one full tomogram per input file -- no
-            # even/odd split, but its output dir also contains .aln and
-            # preview-projection files that must be filtered out before
-            # handing anything to prepare_star --full (see
-            # organize_aretomo2_output's docstring).
-            a2_cfg = cfg.get("aretomo2", {})
+        if engine in ("aretomo2", "imod_raptor"):
+            # Both produce one full tomogram per input file -- no
+            # even/odd split, and both output dirs contain auxiliary
+            # files (AreTomo2's .aln/preview-projections, or IMOD's
+            # intermediate .ali/.st/manifest files) that must be
+            # filtered out before handing anything to prepare_star
+            # --full (see organize_aretomo2_output's docstring; reused
+            # as-is for imod_raptor since it's engine-agnostic).
+            eng_cfg = cfg.get("aretomo2" if engine == "aretomo2" else "imod", {})
+            out_suffix = eng_cfg.get("out_suffix", "_AreTomo" if engine == "aretomo2" else "_final")
             clean_dir = Path(organize_cfg.get("out_dir", Path(aretomo_out_dir) / "tomograms"))
             if args.dry_run:
                 print(f"+ [dry-run] would organize {aretomo_out_dir} -> {clean_dir}")
                 full_dir = clean_dir
             else:
-                full_dir = organize_aretomo2_output(
-                    aretomo_out_dir, clean_dir, a2_cfg.get("out_suffix", "_AreTomo"))
-            pixel_size = a2_cfg.get("pix_size", 1.0) * a2_cfg.get("out_bin", 1.0)
+                full_dir = organize_aretomo2_output(aretomo_out_dir, clean_dir, out_suffix)
+            if engine == "aretomo2":
+                pixel_size = eng_cfg.get("pix_size", 1.0) * eng_cfg.get("out_bin", 1.0)
+            else:
+                pixel_size = eng_cfg.get("pixel_size_angstrom", 1.0) * eng_cfg.get("bin_factor", 1.0)
         else:
             evn_dir, odd_dir, pixel_size, defocus_list = run_organize(
                 organize_cfg, aretomo_out_dir, args.dry_run)
 
     if active("prepare_star"):
         ps_cfg = dict(isonet_cfg.get("prepare_star", {}))
-        if pixel_size is None or (aretomo_engine != 2 and (evn_dir is None or odd_dir is None)):
+        no_evn_odd_engine = engine in ("aretomo2", "imod_raptor")
+        if pixel_size is None or (not no_evn_odd_engine and (evn_dir is None or odd_dir is None)):
             raise RuntimeError(
                 "prepare_star needs the organize stage's output -- run with "
                 "--start-from organize (or earlier), it can't be skipped on its own")
@@ -359,9 +526,10 @@ def main():
         # dir every later stage expects to find it in.
         star_file = Path(organize_cfg.get("out_dir", ".")) / ps_cfg.get("star_name", star_name)
         ps_cfg["star_name"] = str(star_file)
-        if aretomo_engine == 2:
-            # AreTomo2 writes no CTF.txt-equivalent file -- no automatic
-            # per-tomogram defocus available, so defocus is omitted
+        if no_evn_odd_engine:
+            # Neither AreTomo2 nor IMOD+RAPTOR write a CTF.txt-equivalent
+            # file -- no automatic per-tomogram defocus available, so
+            # defocus is omitted
             # entirely (isonet.py falls back to its own default) unless
             # the user set isonet.prepare_star.defocus explicitly.
             isonet2_steps.prepare_star(
@@ -390,12 +558,12 @@ def main():
         if top_ctf_n:
             # refine has no --tomo_idx (unlike deconv/make_mask/predict) --
             # give it a star file containing only the selected rows instead.
-            if aretomo_engine == 2:
-                # AreTomo2 does no CTF estimation -- no ctf_scores.csv to
-                # rank by, so just take the first N tomograms instead of
-                # the top N by CTF score.
+            if engine in ("aretomo2", "imod_raptor"):
+                # Neither engine does AreTomo3-style CTF estimation -- no
+                # ctf_scores.csv to rank by, so just take the first N
+                # tomograms instead of the top N by CTF score.
                 keep = select_first_n_indices(star_file, int(top_ctf_n))
-                print(f"refine: top_ctf_n={top_ctf_n} (aretomo_engine: 2 -- no CTF score "
+                print(f"refine: top_ctf_n={top_ctf_n} (engine: {engine} -- no CTF score "
                       f"available, using first {top_ctf_n} tomograms instead) -> "
                       f"training on rlnIndex {sorted(keep)}")
             else:
