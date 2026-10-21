@@ -139,9 +139,9 @@ aretomo:
 #     enabled: true          # ccderaser -find before binning (hot pixels / X-ray strikes)
 #   erase_gold:
 #     enabled: false         # remove tracked gold fiducials from the aligned stack before reconstruction
-#     # better_radius_px:    # override erase radius (px); omit to use ccderaser's own default
+#     better_radius_px: null # override erase radius (px); null = use ccderaser's own default
 #   raptor:
-#     # markers_per_image:   # omit to let RAPTOR auto-estimate (recommended to start)
+#     markers_per_image: null  # null = let RAPTOR auto-estimate (recommended to start)
 #     xray: false            # RAPTOR's own -xray: strip strong line features before marker detection
 #   reconstruction:
 #     fake_sirt_iterations: 10  # omit/0 to skip this extra reconstruction variant entirely
