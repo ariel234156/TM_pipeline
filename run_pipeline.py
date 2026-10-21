@@ -243,14 +243,18 @@ def run_imod_align(cfg: dict, dry_run: bool) -> Path:
             print(f"+ [dry-run] would process {path} (mode={mode}) through "
                   f"alignframes/extracttilts/ccderaser/newstack/RAPTOR")
             base = path.stem
-            manifest[base] = {"ali": str(out_dir / f"{base}_PLACEHOLDER.ali"),
+            manifest[base] = {"ali_withgold": str(out_dir / f"{base}_PLACEHOLDER.ali"),
                                "tlt": str(out_dir / f"{base}_PLACEHOLDER.tlt"),
                                "base": base}
             continue
 
         base_guess = path.stem
         existing = manifest.get(base_guess)
-        if existing and Path(existing["ali"]).exists() and Path(existing["tlt"]).exists():
+        wants_nogold = cfg.get("erase_gold", {}).get("enabled", False)
+        if (existing and Path(existing["ali_withgold"]).exists()
+                and Path(existing["tlt"]).exists()
+                and (not wants_nogold or (existing.get("ali_nogold")
+                                           and Path(existing["ali_nogold"]).exists()))):
             print(f"imod_align: {base_guess} already aligned (resuming) -- skipping")
             continue
 
@@ -272,13 +276,17 @@ def run_imod_align(cfg: dict, dry_run: bool) -> Path:
             raptor_result = imod_step.run_raptor(
                 cfg, binned, out_dir, exec_path=str(cfg["bin_dir"]), dry_run=dry_run)
 
+            # Keep BOTH the with-gold (raw RAPTOR) and no-gold (erased)
+            # aligned stacks when erase_gold is enabled -- per request,
+            # every tilt series gets reconstructed both ways, not just
+            # whichever erase_gold.enabled picks.
+            entry = {"ali_withgold": str(raptor_result["ali"]),
+                     "tlt": str(raptor_result["tlt"]), "base": base_guess}
             if cfg.get("erase_gold", {}).get("enabled", False):
-                ali = imod_step.erase_gold(cfg, raptor_result, out_dir, dry_run)
-            else:
-                ali = raptor_result["ali"]
+                ali_nogold = imod_step.erase_gold(cfg, raptor_result, out_dir, dry_run)
+                entry["ali_nogold"] = str(ali_nogold)
 
-            manifest[base_guess] = {"ali": str(ali), "tlt": str(raptor_result["tlt"]),
-                                     "base": base_guess}
+            manifest[base_guess] = entry
             manifest_path.write_text(json.dumps(manifest, indent=2))
         except Exception as exc:
             print(f"imod_align: {base_guess} FAILED ({type(exc).__name__}: {exc}) -- "
@@ -302,10 +310,16 @@ def run_imod_align(cfg: dict, dry_run: bool) -> Path:
 def run_imod_reconstruct(cfg: dict, dry_run: bool) -> Path:
     """engine: imod_raptor, imod_reconstruct stage: WBP reconstruction
     (always) + optional FakeSIRT and mtffilter-filtered reconstructions,
-    for every tilt series in imod_align's manifest. Whichever variant
-    imod.feed_variant names (default 'wbp') is symlinked to
-    <base><imod.out_suffix>.mrc -- the predictable name organize/
-    relion5_star look for (same mechanism as AreTomo2's out_suffix)."""
+    for every tilt series in imod_align's manifest -- run for BOTH the
+    with-gold and no-gold aligned stacks when a no-gold one exists (per
+    explicit request: every tilt series gets both tomograms, not just
+    whichever erase_gold.enabled used to pick). Whichever variant
+    imod.feed_variant names (default 'wbp') from the no-gold reconstruction
+    (falling back to with-gold if no-gold wasn't produced for this tilt
+    series) is symlinked to <base><imod.out_suffix>.mrc -- the predictable
+    name organize/relion5_star look for (same mechanism as AreTomo2's
+    out_suffix) -- per explicit request, downstream processing continues
+    on the no-gold tomogram."""
     out_dir = Path(cfg["out_dir"])
     manifest_path = out_dir / "imod_align_manifest.json"
     final_suffix = cfg.get("out_suffix", "_final")
@@ -320,29 +334,36 @@ def run_imod_reconstruct(cfg: dict, dry_run: bool) -> Path:
     rec_cfg = cfg.get("reconstruction", {})
     flt_cfg = cfg.get("filtered_reconstruction", {})
 
-    for base, entry in manifest.items():
-        ali, tlt = Path(entry["ali"]), Path(entry["tlt"])
+    def _reconstruct_one(ali: Path, tlt: Path) -> Path:
+        """WBP (always) + optional FakeSIRT/filtered for one aligned
+        stack. Returns whichever imod.feed_variant names."""
         chosen = imod_step.reconstruct(cfg, ali, tlt, out_dir, suffix="", dry_run=dry_run)
-
         fake_sirt = rec_cfg.get("fake_sirt_iterations")
         if fake_sirt:
             fs_path = imod_step.reconstruct(
                 cfg, ali, tlt, out_dir, suffix=f"_FS{fake_sirt}", dry_run=dry_run)
             if feed_variant == "fake_sirt":
                 chosen = fs_path
-
         if flt_cfg.get("enabled", False):
             flt_path = imod_step.filtered_reconstruct(cfg, ali, tlt, out_dir, dry_run=dry_run)
             if feed_variant == "filtered":
                 chosen = flt_path
+        return chosen
+
+    for base, entry in manifest.items():
+        tlt = Path(entry["tlt"])
+        chosen_withgold = _reconstruct_one(Path(entry["ali_withgold"]), tlt)
+        chosen_feed = chosen_withgold
+        if entry.get("ali_nogold"):
+            chosen_feed = _reconstruct_one(Path(entry["ali_nogold"]), tlt)
 
         final_path = out_dir / f"{base}{final_suffix}.mrc"
         if dry_run:
-            print(f"+ [dry-run] would symlink {chosen} -> {final_path}")
+            print(f"+ [dry-run] would symlink {chosen_feed} -> {final_path}")
         else:
             if final_path.exists() or final_path.is_symlink():
                 final_path.unlink()
-            os.symlink(chosen.resolve(), final_path)
+            os.symlink(chosen_feed.resolve(), final_path)
 
     print(f"imod_reconstruct: {len(manifest)} tomograms -> {out_dir} "
           f"(feed variant: {feed_variant}{final_suffix}.mrc)")

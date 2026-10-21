@@ -156,10 +156,18 @@ aretomo:
 #   thickness_px: 512
 #   gold_diameter_nm: 10
 #   out_suffix: _final      # final tomogram filename: <base><out_suffix>.mrc (what organize/relion5_star look for)
-#   feed_variant: wbp        # which reconstruction becomes <base>_final.mrc: wbp | fake_sirt | filtered
+#   feed_variant: wbp        # which reconstruction type becomes <base>_final.mrc: wbp | fake_sirt | filtered
 #   xray_removal:
 #     enabled: true          # ccderaser -find before binning (hot pixels / X-ray strikes)
 #   erase_gold:
+#     # When enabled, EVERY tilt series gets reconstructed BOTH ways: with
+#     # gold (<base>_bin8.mrc, from the raw RAPTOR-aligned stack) and
+#     # without gold (<base>_bin8_noGold.mrc, from the gold-erased stack) --
+#     # both sets of files (plus FakeSIRT/filtered variants if configured)
+#     # always exist on disk. The <base>_final.mrc symlink (what organize/
+#     # relion5_star/downstream IsoNet2 use) is built from the NO-GOLD
+#     # reconstruction specifically -- downstream processing continues on
+#     # the gold-erased tomogram.
 #     enabled: false         # remove tracked gold fiducials from the aligned stack before reconstruction
 #     better_radius_px: null # override erase radius (px); null = use ccderaser's own default
 #   raptor:
