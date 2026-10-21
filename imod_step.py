@@ -64,6 +64,7 @@ real gold fiducial markers in the sample.
 """
 import math
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -298,14 +299,39 @@ def erase_gold(cfg: dict, raptor_result: dict, out_dir: Path, dry_run: bool) -> 
     ccderaser -circle to erase each tracked bead position from the
     aligned stack -- the standard IMOD "erase gold" step, done here BEFORE
     reconstruction so the gold-erased version is what gets reconstructed.
-    Returns the gold-erased .ali path."""
+    Returns the gold-erased .ali path.
+
+    GOTCHA (confirmed empirically, 2026-10-21): RAPTOR's *.fid.txt is NOT
+    a plain point list -- it's a full ASCII model dump with ~24 header
+    lines (imod/max/offsets/.../contour) PLUS a repeated "object .../
+    contour ..." marker line before every single contour (64 of them on
+    a real test file, one pair per tracked bead trajectory). point2model
+    expects pure "x y z" data lines only and fails immediately on the
+    first header line ("ERROR: point2model - There must be at least 2
+    values on the first line"). Filtered here to lines that actually
+    start with a number -- every header/marker line starts with a word,
+    so this cleanly extracts just the point data regardless of how many
+    contours there are, with no need to know the exact header length (it
+    varies). This collapses all per-bead contours into one flat
+    scattered-point object, which is fine for -scat/-circle erasure
+    (ccderaser just erases a circle at every point, independent of which
+    trajectory it came from)."""
     base = raptor_result["base"]
     eg_cfg = dict(cfg.get("erase_gold", {}))
     eg_cfg.pop("enabled", None)
     fid_mod = out_dir / f"{base}_fid.mod"
-    _run([_bin(cfg, "point2model"), "-scat",
-          "-input", str(raptor_result["fid_txt"]),
-          "-output", str(fid_mod)], dry_run, cfg)
+
+    fid_points = out_dir / f"{base}_fid_points.txt"
+    if dry_run:
+        _run([_bin(cfg, "point2model"), "-scat",
+              "-input", str(fid_points), "-output", str(fid_mod)], dry_run, cfg)
+    else:
+        point_re = re.compile(r"^-?\d")
+        lines = [ln for ln in Path(raptor_result["fid_txt"]).read_text().splitlines()
+                 if point_re.match(ln)]
+        fid_points.write_text("\n".join(lines) + "\n")
+        _run([_bin(cfg, "point2model"), "-scat",
+              "-input", str(fid_points), "-output", str(fid_mod)], dry_run, cfg)
 
     erased_ali = out_dir / f"{base}_noGold.ali"
     better_radius = eg_cfg.pop("better_radius_px", None)
