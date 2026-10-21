@@ -282,6 +282,27 @@ def run_raptor(cfg: dict, binned_stack: Path, out_dir: Path, exec_path: str, dry
     (raptor_scratch / "IMOD" / f"{base}.xf").rename(xf_dst)
     (raptor_scratch / "IMOD" / f"{base}.fid.txt").rename(fid_dst)
 
+    if xf_dst.stat().st_size == 0:
+        # Confirmed empirically: RAPTOR's internal tiltalign call for
+        # "Generating aligned stack" can crash before writing anything,
+        # leaving a 0-byte .xf (its own RAPTOR.log shows the alignment
+        # solve converging fine, then "ERROR: error executing the
+        # command tiltalign ... in function RAPTOPR::Main" right at
+        # "Generating aligned stack"). Raise here with the real cause
+        # instead of letting a confusing downstream newstack error
+        # ("The transform file contains no transforms") be the only
+        # signal -- no retry (by design), just a clear, honest failure.
+        hint = ""
+        src_log = raptor_scratch / "align" / f"{base}_RAPTOR.log"
+        if src_log.exists():
+            hint = f" See {src_log} for RAPTOR's own account of what happened."
+        raise RuntimeError(
+            f"RAPTOR/tiltalign produced an empty {xf_dst} -- this is the known "
+            f"tiltalign crash (see imod_step.py's run_raptor docstring), not a "
+            f"config problem. No automatic retry by design -- re-run "
+            f"run_pipeline.py --start-from imod_align for just this tilt series "
+            f"({base}).{hint}")
+
     ali_src = raptor_scratch / "align" / f"{base}.ali"
     if ali_src.exists():
         ali_src.rename(ali_dst)
