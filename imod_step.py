@@ -95,11 +95,12 @@ def align_frames_eer(cfg: dict, mdoc_path: Path, out_dir: Path, dry_run: bool) -
     # nothing has been assembled from the raw frames at this point).
     _run([_bin(cfg, "extracttilts"), "-mdoc", str(mdoc_path), str(angles_path)], dry_run)
 
+    eer_params = cfg.get("eer_params", [1, 10, -1])
     cmd = [_bin(cfg, "alignframes"),
            "-mdoc", str(mdoc_path),
            "-path", str(cfg["in_dir"]),
            "-gain", str(cfg["gain"]),
-           "-eer"] + [str(v) for v in cfg.get("eer_params", [1, 10, -1])]
+           "-eer", ",".join(str(v) for v in eer_params)]
     cmd += ["-volt", str(cfg.get("voltage", 300)),
             "-stack", str(stack_path),
             "-tilt", str(angles_path),
@@ -159,7 +160,7 @@ def bin_and_normalize(cfg: dict, stack: Path, out_dir: Path, dry_run: bool) -> t
     # write to each output file" (those flags are for a different list-
     # accumulation mode, for combining many single-section files).
     cmd = [_bin(cfg, "newstack"),
-           "-multadd", "1", str(min_shift),
+           "-multadd", f"1,{min_shift}",
            "-bin", str(bin_factor),
            "-antialias", "4",
            "-mode", "1",
@@ -272,18 +273,24 @@ def filtered_reconstruct(cfg: dict, ali: Path, tlt: Path, out_dir: Path, dry_run
     flt_ali = out_dir / f"{base}_flt.ali"
     cmd = [_bin(cfg, "mtffilter"), "-input", str(ali), "-output", str(flt_ali),
            "-highpass", str(high_pass),
-           "-lowpass"] + [str(v) for v in low_pass]
+           "-lowpass", ",".join(str(v) for v in low_pass)]
     cmd += _extra_args(flt_cfg)
     _run(cmd, dry_run)
     return reconstruct(cfg, flt_ali, tlt, out_dir, suffix="", dry_run=dry_run)
 
 
 def _extra_args(flags: dict) -> list:
+    # IMOD's PIP-based argument parser (confirmed 2026-10-21 against a
+    # real run + a synthetic MRC test): a multi-value option needs its
+    # values comma-joined into ONE token ("-multadd 1,10"), not passed as
+    # separate space-separated tokens ("-multadd 1 10") -- the latter
+    # silently mis-parses the second value as the next positional
+    # argument (a filename), e.g. "ERROR: iiOpen - Opening file 10".
     args = []
     for key, value in (flags or {}).items():
         args.append(f"-{key}")
         if isinstance(value, (list, tuple)):
-            args.extend(str(v) for v in value)
+            args.append(",".join(str(v) for v in value))
         elif value is not True:
             args.append(str(value))
     return args
