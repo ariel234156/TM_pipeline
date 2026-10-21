@@ -153,13 +153,17 @@ def bin_and_normalize(cfg: dict, stack: Path, out_dir: Path, dry_run: bool) -> t
         min_val = float(result.stdout.split()[0])
         min_shift = 10 - int(min_val)
 
+    # newstack's usage is positional (`input_files... output_file`) --
+    # confirmed from a real run: using -input/-output flags instead
+    # triggers "ERROR: NEWSTACK - You must specify number of sections to
+    # write to each output file" (those flags are for a different list-
+    # accumulation mode, for combining many single-section files).
     cmd = [_bin(cfg, "newstack"),
            "-multadd", "1", str(min_shift),
            "-bin", str(bin_factor),
            "-antialias", "4",
            "-mode", "1",
-           "-input", str(stack),
-           "-output", str(binned)]
+           str(stack), str(binned)]
     _run(cmd, dry_run)
     return binned, base
 
