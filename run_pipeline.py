@@ -203,7 +203,25 @@ def run_imod_align(cfg: dict, dry_run: bool) -> Path:
     -> optional x-ray removal -> bin+normalize -> RAPTOR -> optional gold
     erasure. Persists a manifest (ali/tlt path per tilt series) to disk so
     a later separate `--start-from imod_reconstruct` invocation can pick
-    up without re-running RAPTOR."""
+    up without re-running RAPTOR.
+
+    SKIP-AND-CONTINUE (added 2026-10-21, per explicit request): a single
+    tilt series hitting the known non-deterministic tiltalign crash (see
+    imod_step.run_raptor's docstring) no longer aborts the whole batch.
+    Each tilt series' processing is wrapped in try/except -- a failure
+    is logged clearly (which tilt series, what error) and the loop moves
+    on to the next one. The manifest only ever contains tilt series that
+    actually succeeded, so imod_reconstruct naturally only reconstructs
+    those; failed ones are summarized at the end with the exact re-run
+    command for just that tilt series. If EVERY tilt series fails, this
+    still raises (nothing would be in the manifest).
+
+    RESUME: if a manifest from a previous run already exists and lists a
+    tilt series whose .ali/.tlt files still exist on disk, that tilt
+    series is skipped (reused as-is) instead of re-running RAPTOR from
+    scratch -- so re-running this stage after fixing/retrying one failed
+    tilt series doesn't waste several minutes per tilt series redoing
+    ones that already succeeded."""
     out_dir = Path(cfg["out_dir"])
     out_dir.mkdir(parents=True, exist_ok=True)
     inputs = _find_imod_inputs(cfg)
@@ -211,7 +229,15 @@ def run_imod_align(cfg: dict, dry_run: bool) -> Path:
         raise RuntimeError(
             f"no tilt series found for imod_align (input_mode={cfg.get('input_mode', 'eer')})")
 
+    manifest_path = out_dir / "imod_align_manifest.json"
     manifest = {}
+    if manifest_path.exists() and not dry_run:
+        try:
+            manifest = json.loads(manifest_path.read_text())
+        except (json.JSONDecodeError, OSError):
+            manifest = {}
+
+    failed = []
     for mode, path in inputs:
         if dry_run:
             print(f"+ [dry-run] would process {path} (mode={mode}) through "
@@ -222,34 +248,54 @@ def run_imod_align(cfg: dict, dry_run: bool) -> Path:
                                "base": base}
             continue
 
-        if mode == "eer":
-            stack, base = imod_step.align_frames_eer(cfg, path, out_dir, dry_run)
-        else:
-            stack, base = path, path.stem
+        base_guess = path.stem
+        existing = manifest.get(base_guess)
+        if existing and Path(existing["ali"]).exists() and Path(existing["tlt"]).exists():
+            print(f"imod_align: {base_guess} already aligned (resuming) -- skipping")
+            continue
 
-        rawtlt = out_dir / f"{base}_bin{cfg['bin_factor']}.rawtlt"
-        imod_step.extract_rawtlt(cfg, stack, rawtlt, dry_run)
+        try:
+            if mode == "eer":
+                stack, base = imod_step.align_frames_eer(cfg, path, out_dir, dry_run)
+            else:
+                stack, base = path, path.stem
 
-        if cfg.get("xray_removal", {}).get("enabled", True):
-            stack_for_bin = imod_step.erase_xrays(cfg, stack, out_dir, dry_run)
-        else:
-            stack_for_bin = stack
+            rawtlt = out_dir / f"{base}_bin{cfg['bin_factor']}.rawtlt"
+            imod_step.extract_rawtlt(cfg, stack, rawtlt, dry_run)
 
-        binned, _ = imod_step.bin_and_normalize(cfg, stack_for_bin, out_dir, dry_run)
-        raptor_result = imod_step.run_raptor(
-            cfg, binned, out_dir, exec_path=str(cfg["bin_dir"]), dry_run=dry_run)
+            if cfg.get("xray_removal", {}).get("enabled", True):
+                stack_for_bin = imod_step.erase_xrays(cfg, stack, out_dir, dry_run)
+            else:
+                stack_for_bin = stack
 
-        if cfg.get("erase_gold", {}).get("enabled", False):
-            ali = imod_step.erase_gold(cfg, raptor_result, out_dir, dry_run)
-        else:
-            ali = raptor_result["ali"]
+            binned, _ = imod_step.bin_and_normalize(cfg, stack_for_bin, out_dir, dry_run)
+            raptor_result = imod_step.run_raptor(
+                cfg, binned, out_dir, exec_path=str(cfg["bin_dir"]), dry_run=dry_run)
 
-        manifest[base] = {"ali": str(ali), "tlt": str(raptor_result["tlt"]), "base": base}
+            if cfg.get("erase_gold", {}).get("enabled", False):
+                ali = imod_step.erase_gold(cfg, raptor_result, out_dir, dry_run)
+            else:
+                ali = raptor_result["ali"]
 
-    manifest_path = out_dir / "imod_align_manifest.json"
-    manifest_path.write_text(json.dumps(manifest, indent=2))
+            manifest[base_guess] = {"ali": str(ali), "tlt": str(raptor_result["tlt"]),
+                                     "base": base_guess}
+            manifest_path.write_text(json.dumps(manifest, indent=2))
+        except Exception as exc:
+            print(f"imod_align: {base_guess} FAILED ({type(exc).__name__}: {exc}) -- "
+                  f"skipping, continuing with the remaining tilt series")
+            failed.append(base_guess)
+
+    if not dry_run:
+        manifest_path.write_text(json.dumps(manifest, indent=2))
     print(f"imod_align: {len(manifest)} tilt series aligned -> {out_dir} "
           f"(manifest: {manifest_path})")
+    if failed:
+        print(f"imod_align: {len(failed)} tilt series FAILED and were skipped: "
+              f"{', '.join(failed)}")
+        print("imod_align: re-run run_pipeline.py --start-from imod_align for just "
+              "those -- already-aligned tilt series will be skipped automatically")
+    if not manifest:
+        raise RuntimeError("imod_align: every tilt series failed -- nothing to reconstruct")
     return out_dir
 
 
