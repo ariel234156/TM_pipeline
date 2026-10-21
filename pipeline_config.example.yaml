@@ -114,28 +114,37 @@ aretomo:
 # Needs REAL gold fiducial markers in the sample (RAPTOR can't align
 # without them).
 #
-# CHECK YOUR IMOD VERSION before trusting a RAPTOR crash to be a bug in
-# this pipeline: confirmed on real gold-fiducial data that IMOD 5.1.0
-# (RHEL8 build, Dec 2024) has a real tiltalign crash -- reproducible
-# across bash, Python subprocess (argv-list and shell=True), every
-# -mode/-input flag spelling tried, with or without correct PATH/
-# LD_LIBRARY_PATH. tiltalign dies partway through writing the .xf
-# transform file, right after printing the full per-point residual-error
-# table, leaving .xf empty or truncated -- and RAPTOR's own exit code
-# still reports 0, so it fails silently unless something checks the
-# actual output. Installing IMOD 5.1.13 (13 point-releases newer) into a
-# user-writable directory (no sudo/system changes needed if /usr/local
-# isn't writable) and pointing bin_dir at it dramatically reduced the
-# crash (went from failing essentially every attempt to succeeding most
-# of the time, with any remaining failure recovering on a plain retry of
-# the same input) -- but did NOT prove to eliminate it completely. This
-# pipeline deliberately does not add automatic retry for it (keep it
+# CHECK YOUR IMOD VERSION AND IMOD_DIR before trusting a RAPTOR crash to
+# be a bug in this pipeline. Two real, separate issues were found and
+# fixed on real gold-fiducial data:
+#   1. IMOD 5.1.0 (RHEL8 build, Dec 2024) has a real tiltalign crash --
+#      reproducible across bash, Python subprocess (argv-list and
+#      shell=True), every -mode/-input flag spelling tried. tiltalign
+#      dies partway through writing the .xf transform file, right after
+#      printing the full per-point residual-error table, leaving .xf
+#      empty or truncated -- and RAPTOR's own exit code still reports 0.
+#      Installing IMOD 5.1.13 (13 point-releases newer) into a
+#      user-writable directory (no sudo/system changes needed if
+#      /usr/local isn't writable) fixed this, but ALSO needed setting
+#      the IMOD_DIR environment variable to the new install (not just
+#      PATH/LD_LIBRARY_PATH) -- the RAPTOR wrapper script runs
+#      "$IMOD_DIR/bin/realbin/RAPTOR" literally, so if your machine has
+#      IMOD_DIR already set globally (check /etc/profile.d), it'll
+#      silently keep running the OLD install's binary no matter what
+#      bin_dir says here, unless something overrides IMOD_DIR too (which
+#      imod_step.py's _env() now does).
+#   2. Separately (not a crash): bare RAPTOR never writes align/*.ali
+#      itself, with or without -rec -- it reaches "Generating aligned
+#      stack" in its own log and then fails calling tiltalign again for
+#      that one step. imod_step.py builds .ali itself via a plain
+#      newstack -xform whenever this happens.
+# This pipeline deliberately does not add automatic retry (keep it
 # simple, fail loudly) -- if a tilt series comes out with an empty or
-# missing .xf/.ali, just re-run run_pipeline.py --start-from imod_align
-# for that one tilt series.
+# missing .xf, just re-run run_pipeline.py --start-from imod_align for
+# that one tilt series.
 # ---------------------------------------------------------------------------
 # imod:
-#   bin_dir: /usr/local/imod_5.1.0/bin  # if you hit the crash above, try a newer IMOD install instead
+#   bin_dir: /usr/local/imod_5.1.0/bin  # if you hit the crash above, try a newer IMOD install instead (see IMOD_DIR note above)
 #   input_mode: eer         # eer (raw frames + .mdoc, via alignframes) | mrc (pre-assembled .st/.mrc)
 #   in_dir: /path/to/eer_frames_or_mrc_stacks/
 #   in_suffix: .mdoc        # input_mode: eer only
