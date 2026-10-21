@@ -195,6 +195,26 @@ def select_top_ctf_indices(organize_out_dir, n: int) -> set:
     return {idx for idx, _score in rows[:n]}
 
 
+def select_first_n_indices(star_file: Path, n: int) -> set:
+    """aretomo_engine: 2 fallback for isonet.refine.top_ctf_n: AreTomo2 does
+    no CTF estimation of its own, so there is no ctf_scores.csv to rank by
+    (unlike the aretomo_engine: 3 path -- see select_top_ctf_indices). Just
+    takes the first n data rows in star-file order (the order
+    organize_aretomo2_output() symlinked tomograms in, i.e. sorted
+    filename order) instead of ranking by any quality metric."""
+    indices = []
+    for line in Path(star_file).read_text().splitlines():
+        first_token = line.split(None, 1)[0] if line.split() else None
+        try:
+            idx = int(first_token)
+        except (TypeError, ValueError):
+            continue
+        indices.append(idx)
+    if not indices:
+        raise RuntimeError(f"no data rows found in {star_file}")
+    return set(indices[:n])
+
+
 def write_filtered_star(star_file: Path, keep_indices: set, suffix: str) -> Path:
     """isonet.py's refine has no --tomo_idx flag (unlike deconv/make_mask/
     predict) -- the only way to restrict which tomograms it trains on is to
@@ -370,10 +390,19 @@ def main():
         if top_ctf_n:
             # refine has no --tomo_idx (unlike deconv/make_mask/predict) --
             # give it a star file containing only the selected rows instead.
-            keep = select_top_ctf_indices(organize_cfg["out_dir"], int(top_ctf_n))
+            if aretomo_engine == 2:
+                # AreTomo2 does no CTF estimation -- no ctf_scores.csv to
+                # rank by, so just take the first N tomograms instead of
+                # the top N by CTF score.
+                keep = select_first_n_indices(star_file, int(top_ctf_n))
+                print(f"refine: top_ctf_n={top_ctf_n} (aretomo_engine: 2 -- no CTF score "
+                      f"available, using first {top_ctf_n} tomograms instead) -> "
+                      f"training on rlnIndex {sorted(keep)}")
+            else:
+                keep = select_top_ctf_indices(organize_cfg["out_dir"], int(top_ctf_n))
+                print(f"refine: top_ctf_n={top_ctf_n} -> training on rlnIndex {sorted(keep)} "
+                      f"({star_file})")
             refine_star_file = write_filtered_star(star_file, keep, suffix="_top_ctf")
-            print(f"refine: top_ctf_n={top_ctf_n} -> training on rlnIndex {sorted(keep)} "
-                  f"({refine_star_file})")
         refine_out_dir = isonet2_steps.refine(
             refine_star_file, isonet_bin=isonet_bin, dry_run=args.dry_run, **rf_cfg)
 

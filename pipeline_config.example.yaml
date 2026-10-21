@@ -212,16 +212,22 @@ isonet:
 
   refine:
     # top_ctf_n (optional, run_pipeline.py-only key -- not an isonet.py flag):
-    # train on just the N tilt series with the highest CTF cross-correlation
-    # score (column 6 of AreTomo3's *_CTF.txt, at the near-zero-tilt image --
-    # see organize_for_isonet2.py's parse_ctf_score_near_zero). Scores are
-    # written to <organize.out_dir>/ctf_scores.csv by the organize stage, so
-    # organize must have run at least once first. isonet.py's refine has no
-    # --tomo_idx of its own (unlike deconv/make_mask/predict), so
-    # run_pipeline.py instead writes a filtered copy of the star file
-    # (<star_name>_top_ctf.star, same directory) containing only the
-    # selected rows, and points refine at that instead. Leave unset/0 to
-    # train on every tomogram in the star file, as before.
+    # cap training to just N tomograms, to cut refine's runtime. Selection
+    # depends on aretomo_engine:
+    #   3: the N tilt series with the highest CTF cross-correlation score
+    #      (column 6 of AreTomo3's *_CTF.txt, at the near-zero-tilt image --
+    #      see organize_for_isonet2.py's parse_ctf_score_near_zero). Scores
+    #      are written to <organize.out_dir>/ctf_scores.csv by the organize
+    #      stage, so organize must have run at least once first.
+    #   2: AreTomo2 does no CTF estimation of its own -- no ctf_scores.csv
+    #      to rank by -- so run_pipeline.py just takes the first N
+    #      tomograms in star-file order instead (see
+    #      select_first_n_indices()), not a quality-ranked selection.
+    # Either way, isonet.py's refine has no --tomo_idx of its own (unlike
+    # deconv/make_mask/predict), so run_pipeline.py writes a filtered copy
+    # of the star file (<star_name>_top_ctf.star, same directory)
+    # containing only the selected rows, and points refine at that instead.
+    # Leave unset/0 to train on every tomogram in the star file.
     # top_ctf_n: 10
     #
     # GOTCHA: IsoNet2's own training loop is `for step in range(save_interval,
