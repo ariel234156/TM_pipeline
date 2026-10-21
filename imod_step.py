@@ -227,12 +227,28 @@ def run_raptor(cfg: dict, binned_stack: Path, out_dir: Path, exec_path: str, dry
     stack (matches bin_tomo.sh's own proven math, see
     gold_diameter_px()).
 
-    No retry, no output verification, no workaround for RAPTOR not
-    writing a file -- if RAPTOR doesn't produce .tlt/.xf/.ali, the
-    .rename() calls below fail with a plain FileNotFoundError, exactly
-    like bin_tomo.sh's own `mv` would fail with "No such file or
-    directory". If that happens, it's a RAPTOR/tiltalign problem on this
-    install for this input, not something to paper over here."""
+    No retry, no output verification for .tlt/.xf -- if RAPTOR doesn't
+    produce those, the .rename() calls below fail with a plain
+    FileNotFoundError, exactly like bin_tomo.sh's own `mv` would fail
+    with "No such file or directory".
+
+    GOTCHA (confirmed empirically, 2026-10-21, after fixing the IMOD_DIR
+    bug in _env()): bare RAPTOR (the CLI binary, not the full Etomo/
+    runraptor wrapper) never writes align/*.ali itself, with or without
+    -rec -- confirmed from its own log, which reaches "Generating aligned
+    stack" and then fails calling tiltalign again for that specific step
+    ("error executing the command tiltalign ... in function
+    RAPTOPR::Main"), even though the alignment itself (the .xf/.tlt
+    written just before that point) completes correctly. The
+    tiltalignScript.txt RAPTOR writes even says, in its own comment, to
+    "execute from command line" a newstack -xform step afterward -- i.e.
+    this is meant to be a manual follow-up, not something bare RAPTOR
+    does for you. So the .ali is built here instead, via a plain
+    newstack -xform of the already-complete .xf against binned_stack --
+    no need to detect/trim a truncated .xf anymore, since the earlier
+    tiltalign crash (which DID truncate .xf) is what the IMOD_DIR fix
+    actually resolved; this part is just the one remaining, non-crash
+    gap in what bare RAPTOR produces."""
     base = binned_stack.stem
     raptor_scratch = out_dir / base
     rc_cfg = dict(cfg.get("raptor", {}))
@@ -257,12 +273,20 @@ def run_raptor(cfg: dict, binned_stack: Path, out_dir: Path, exec_path: str, dry
     tlt_dst, xf_dst, fid_dst, ali_dst = (out_dir / f"{base}.tlt", out_dir / f"{base}.xf",
                                           out_dir / f"{base}.fid.txt", out_dir / f"{base}.ali")
     if dry_run:
+        _run([_bin(cfg, "newstack"), "-xform", str(xf_dst), str(binned_stack), str(ali_dst)],
+             dry_run, cfg)
         return {"ali": ali_dst, "tlt": tlt_dst, "xf": xf_dst, "fid_txt": fid_dst, "base": base}
 
     (raptor_scratch / "IMOD" / f"{base}.tlt").rename(tlt_dst)
     (raptor_scratch / "IMOD" / f"{base}.xf").rename(xf_dst)
     (raptor_scratch / "IMOD" / f"{base}.fid.txt").rename(fid_dst)
-    (raptor_scratch / "align" / f"{base}.ali").rename(ali_dst)
+
+    ali_src = raptor_scratch / "align" / f"{base}.ali"
+    if ali_src.exists():
+        ali_src.rename(ali_dst)
+    else:
+        _run([_bin(cfg, "newstack"), "-xform", str(xf_dst), str(binned_stack), str(ali_dst)],
+             dry_run, cfg)
 
     shutil.rmtree(raptor_scratch, ignore_errors=True)
     return {"ali": ali_dst, "tlt": tlt_dst, "xf": xf_dst, "fid_txt": fid_dst, "base": base}
