@@ -56,6 +56,14 @@ def create_template(cfg: dict, dry_run: bool) -> Path:
     cmd = [_script(cfg, "pytom_create_template.py"),
            "-i", cfg["reference_map"],
            "-o", str(out_file),
+           # pytom_create_template.py reads the input voxel size from the
+           # MRC header if not given, and requires it to be <= the output
+           # voxel size (it only downsamples). The reference map's header
+           # stores 0.30528 A (float32 rounding noise from whatever tool
+           # wrote it) instead of the intended 0.305 A, which trips that
+           # check even though the two are physically the same spacing --
+           # so force the input voxel size to the real, intended value.
+           "--input-voxel-size-angstrom", str(cfg["voxel_size_angstrom"]),
            "--output-voxel-size-angstrom", str(cfg["voxel_size_angstrom"])]
     if cfg.get("center", True):
         cmd.append("--center")
