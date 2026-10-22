@@ -356,28 +356,62 @@ isonet:
 # output_dir if not set here).
 #
 # GOTCHA (confirmed with a real run): IsoNet2's predict step does not
-# write the tomogram's real pixel size into its output MRC header
-# (observed: header says 1.0 A/px regardless of the actual value).
-# pytom_match_template.py falls back to the MRC header if voxel_size_
-# angstrom isn't given explicitly -- pytom_step.py always passes it
-# explicitly from this config instead. You'll see "WARNING: Provided
-# voxel size does not match voxel size annotated in tomogram/template
-# mrc." on every run because of this -- that's expected, and confirms the
-# explicit value is being used instead of the (wrong) header value.
+# always write the tomogram's real pixel size into its output MRC header
+# -- check the REAL header with mrcfile before trusting it either way,
+# don't assume. voxel_size_angstrom below must match whatever that real
+# value actually is. pytom_match_template.py falls back to the MRC
+# header if voxel_size_angstrom isn't given explicitly -- pytom_step.py
+# always passes it explicitly from this config instead. You'll see
+# "WARNING: Provided voxel size does not match voxel size annotated in
+# tomogram/template mrc." on every run because of this -- that's
+# expected, and confirms the explicit value is being used instead of the
+# header value.
+#
+# reference_map_voxel_size_angstrom is the reference density's OWN
+# native pixel size (NOT the tomogram's) -- passed to
+# pytom_create_template.py as --input-voxel-size-angstrom so it
+# downsamples correctly to voxel_size_angstrom (the tomogram's real
+# spacing) for --output-voxel-size-angstrom. Don't collapse these two
+# into one value -- confirmed by a real bad-template-matching run where
+# they'd been set equal by mistake (leftover from an earlier dataset),
+# producing a ~30x scale mismatch that made matching produce garbage.
+#
+# create_template.invert flips the template's density sign -- needed
+# when the reconstruction's contrast convention has the particle
+# opposite from the reference map (check visually; there's no reliable
+# way to infer this from metadata alone).
 #
 # create_mask's box size and mask radius (in pixels) are computed
 # automatically from create_template's actual output box size and
 # particle_diameter_angstrom / voxel_size_angstrom -- not set directly.
+#
+# GOTCHA (confirmed 2026-10-22 against RELION5 5.0.1's own source,
+# src/jaz/tomography/particle_set.cpp): pytom's rlnTomoName comes from
+# the tomogram file's own stem (e.g. IsoNet2 predict output
+# "_isonet2_unet-medium_<base>_final"), which will NOT match the clean
+# tilt series name in relion5_star's tomograms.star ("<base>"). RELION5
+# auto-builds its particles.star optics table by EXACT rlnTomoName match
+# against tomograms.star when particles.star has no optics block of its
+# own -- a mismatch here fails that silently and surfaces later as
+# "rlnTomoTiltSeriesPixelSize missing from optics MetaDataTable" with no
+# mention of the real cause. relion5_tomograms_star points pytom_step.py
+# at the real tomograms.star so it can remap rlnTomoName to the clean
+# name (longest substring match) before merging.
 # ---------------------------------------------------------------------------
 # pytom:
 #   bin_dir: /home/coari/.conda/envs/pytom_tm/bin
+#   relion5_tomograms_star: /path/to/Relion_files/tomograms.star   # see GOTCHA above -- omit to skip the rlnTomoName remap
 #   reference_map: /path/to/reference.mrc
+#   reference_map_voxel_size_angstrom: 0.305   # the reference map's OWN native pixel size -- see GOTCHA above
 #   particle_diameter_angstrom: 150     # in Angstrom, along the longest axis for non-globular particles
 #   voxel_size_angstrom: 6.04           # must match isonet.predict's REAL output pixel size -- see GOTCHA above
 #   # tomogram_dir:                     # defaults to isonet.predict.output_dir above
 #   out_dir: /path/to/template_matching
 #   gpu: [0, 1, 2, 3]
 #   # center: true                     # center the reference's density by center of mass (default true)
+#
+#   create_template:
+#     invert: true                     # flip density sign -- see GOTCHA above; check visually whether your dataset needs this
 #
 #   create_mask:
 #     sigma: 1.0                       # gaussian drop-off at mask edges, in pixels

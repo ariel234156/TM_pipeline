@@ -53,17 +53,20 @@ def _extra_args(flags: dict) -> list:
 def create_template(cfg: dict, dry_run: bool) -> Path:
     out_file = Path(cfg["out_dir"]) / "template.mrc"
     out_file.parent.mkdir(parents=True, exist_ok=True)
+    # pytom_create_template.py reads the input voxel size from the MRC
+    # header if not given, and requires it to be <= the output voxel
+    # size (it only downsamples). The reference map's header stores
+    # 0.30528 A (float32 rounding noise from whatever tool wrote it)
+    # instead of its real 0.305 A, so force the input voxel size
+    # explicitly instead of trusting the header. input and output are
+    # genuinely different values here: input is the reference map's own
+    # native resolution, output is the tomogram's real pixel size (see
+    # the GOTCHA comment on the pytom: config block).
+    input_voxel_size = cfg.get("reference_map_voxel_size_angstrom", cfg["voxel_size_angstrom"])
     cmd = [_script(cfg, "pytom_create_template.py"),
            "-i", cfg["reference_map"],
            "-o", str(out_file),
-           # pytom_create_template.py reads the input voxel size from the
-           # MRC header if not given, and requires it to be <= the output
-           # voxel size (it only downsamples). The reference map's header
-           # stores 0.30528 A (float32 rounding noise from whatever tool
-           # wrote it) instead of the intended 0.305 A, which trips that
-           # check even though the two are physically the same spacing --
-           # so force the input voxel size to the real, intended value.
-           "--input-voxel-size-angstrom", str(cfg["voxel_size_angstrom"]),
+           "--input-voxel-size-angstrom", str(input_voxel_size),
            "--output-voxel-size-angstrom", str(cfg["voxel_size_angstrom"])]
     if cfg.get("center", True):
         cmd.append("--center")
@@ -132,10 +135,26 @@ def match_template_batch(cfg: dict, template_file: Path, mask_file: Path,
 def extract_candidates_batch(cfg: dict, destinations: dict, dry_run: bool) -> list:
     """Run pytom_extract_candidates.py once per tomogram's job.json
     (written by match_template_batch into each destination dir). Returns
-    the list of output .star file paths."""
+    the list of output .star file paths.
+
+    GOTCHA (confirmed 2026-10-22 against RELION5 5.0.1's own source,
+    src/jaz/tomography/particle_set.cpp): pytom's rlnTomoName comes from
+    the tomogram file's own stem (e.g. IsoNet2 predict output
+    "_isonet2_unet-medium_Position_1_3_final"), which does NOT match the
+    clean tilt series name in relion5_star's tomograms.star
+    ("Position_1_3"). RELION5 auto-builds its optics table by exact
+    rlnTomoName match against tomograms.star when particles.star has no
+    optics block of its own -- a mismatch here means the auto-build
+    silently fails to link any particle to a real tomogram, and you get
+    "rlnTomoTiltSeriesPixelSize missing from optics MetaDataTable" with
+    no mention of the real cause. Fixed by remapping rlnTomoName to the
+    clean name (see relion5_tomograms_star config key) right after
+    extraction, before merge_stars concatenates everything."""
     ec_cfg = dict(cfg.get("extract_candidates", {}))
     n_particles = ec_cfg.pop("number_of_particles", 500)
     star_files = []
+    clean_names = (_read_clean_tomo_names(Path(cfg["relion5_tomograms_star"]))
+                   if cfg.get("relion5_tomograms_star") and not dry_run else None)
 
     for stem, dest in destinations.items():
         job_file = dest / "scores.json" if dry_run else _find_job_file(dest)
@@ -145,9 +164,40 @@ def extract_candidates_batch(cfg: dict, destinations: dict, dry_run: bool) -> li
                "--particle-diameter", str(cfg["particle_diameter_angstrom"])]
         cmd += _extra_args(ec_cfg)
         _run(cmd, dry_run)
-        star_files.append(dest / f"{stem}_particles.star")
+        star_file = dest / f"{stem}_particles.star"
+        if clean_names is not None:
+            _remap_tomo_name(star_file, clean_names)
+        star_files.append(star_file)
 
     return star_files
+
+
+def _read_clean_tomo_names(tomograms_star: Path) -> list:
+    import starfile
+    df = starfile.read(tomograms_star)
+    if isinstance(df, dict):
+        df = next(iter(df.values()))
+    return df["rlnTomoName"].astype(str).tolist()
+
+
+def _remap_tomo_name(star_file: Path, clean_names: list) -> None:
+    """Rewrite rlnTomoName in-place to whichever clean_names entry is the
+    longest substring match of the raw value (longest wins so e.g.
+    "Position_1" can't shadow "Position_1_3")."""
+    import starfile
+    df = starfile.read(star_file)
+    rename = {}
+    for raw in df["rlnTomoName"].astype(str).unique():
+        matches = [c for c in clean_names if c in raw]
+        if not matches:
+            raise RuntimeError(f"no clean tomogram name found inside {raw!r} "
+                                f"(from {star_file}) -- checked against {clean_names}")
+        rename[raw] = max(matches, key=len)
+    df["rlnTomoName"] = df["rlnTomoName"].astype(str).replace(rename)
+    # must keep the "particles" block name explicit -- starfile.write on a
+    # bare DataFrame (no block name) writes an unnamed "data_" block instead
+    # of "data_particles", which merge_stars's input files are expected to have
+    starfile.write({"particles": df}, star_file, overwrite=True)
 
 
 def _find_job_file(dest: Path) -> Path:
