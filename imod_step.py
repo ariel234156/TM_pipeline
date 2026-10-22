@@ -355,14 +355,21 @@ def erase_gold(cfg: dict, raptor_result: dict, out_dir: Path, dry_run: bool) -> 
               "-input", str(fid_points), "-output", str(fid_mod)], dry_run, cfg)
 
     erased_ali = out_dir / f"{base}_noGold.ali"
+    # point2model -scat above gives every point "no individual size", and
+    # ccderaser's -circle flag here means "object 1 holds scattered points"
+    # (NOT a radius -- that's a different flag with the same name in
+    # point2model). The actual erase radius comes from -better, which
+    # defaults to gold_diameter_px/2 so the erased circle actually covers
+    # the bead instead of leaving most of it visible.
     better_radius = eg_cfg.pop("better_radius_px", None)
+    if better_radius is None:
+        better_radius = round(gold_diameter_px(cfg) / 2)
     cmd = [_bin(cfg, "ccderaser"),
            "-input", str(raptor_result["ali"]),
            "-output", str(erased_ali),
            "-model", str(fid_mod),
-           "-circle", "1"]
-    if better_radius:
-        cmd += ["-better", str(better_radius)]
+           "-circle", "1",
+           "-better", str(better_radius)]
     cmd += _extra_args(eg_cfg)
     _run(cmd, dry_run, cfg)
     return erased_ali
