@@ -520,7 +520,14 @@ def main():
                      "cs": im_cfg.get("cs", 2.7),
                      "out_suffix": im_cfg.get("out_suffix", "_final"),
                      "optics_group_name": r5_cfg.get("optics_group_name", "opticsGroup1"),
-                     "defocus_handedness": r5_cfg.get("defocus_handedness", 1)},
+                     "defocus_handedness": r5_cfg.get("defocus_handedness", 1),
+                     # enables building a real rlnTomoTiltSeriesName per
+                     # tomogram (RAPTOR's .xf rescaled to full resolution)
+                     # -- see write_tomograms_star_aretomo2's docstring
+                     "bin_dir": im_cfg.get("bin_dir"),
+                     "in_dir": im_cfg.get("in_dir"),
+                     "bin_factor": im_cfg["bin_factor"],
+                     "manifest_path": Path(im_cfg["out_dir"]) / "imod_align_manifest.json"},
                     aretomo_out_dir, mdoc_dir, r5_out_dir)
         elif engine == "aretomo2":
             a2_cfg = cfg.get("aretomo2", {})

@@ -70,12 +70,31 @@ TOMOGRAMS_HEADER = [
     "_rlnMicrographOriginalPixelSize", "_rlnTomoTiltSeriesPixelSize",
     "_rlnTomoTomogramBinning", "_rlnTomoHand", "_rlnOpticsGroupName",
 ]
+# engine: aretomo2/imod_raptor path only -- adds rlnTomoTiltSeriesName/
+# rlnTomoFrameCount (see write_tomograms_star_aretomo2's docstring for
+# why these are required by real RELION5 tomography programs like
+# relion_tomo_subtomo, confirmed against RELION5 5.0.1's own source).
+TOMOGRAMS_HEADER_WITH_STACK = TOMOGRAMS_HEADER + [
+    "_rlnTomoTiltSeriesName", "_rlnTomoFrameCount",
+]
 TILT_SERIES_HEADER = [
     "_rlnMicrographMovieName", "_rlnTomoTiltMovieFrameCount",
     "_rlnTomoNominalStageTiltAngle", "_rlnTomoNominalTiltAxisAngle",
     "_rlnMicrographPreExposure", "_rlnTomoNominalDefocus",
     "_rlnDefocusV", "_rlnDefocusU",
 ]
+# engine: aretomo2/imod_raptor path only -- adds rlnDefocusAngle, required
+# by real RELION5 tomography programs (confirmed from a real
+# relion_tomo_subtomo run: "Label rlnDefocusAngle not present"). Not
+# added to the shared aretomo3 path/TILT_SERIES_HEADER above because
+# AreTomo3's _CTF.txt may carry a real measured astigmatism angle this
+# module doesn't parse yet -- don't fabricate 0.0 there without
+# checking. For THIS path there is no astigmatism angle measurement at
+# all (SerialEM's .mdoc Defocus field is a single scalar, used
+# identically for both DefocusV and DefocusU -- see
+# write_tilt_series_star_from_mdoc), so 0.0 is the honest value, not a
+# placeholder guess.
+TILT_SERIES_HEADER_MDOC_ONLY = TILT_SERIES_HEADER + ["_rlnDefocusAngle"]
 
 
 def parse_mdoc(mdoc_path: Path) -> tuple:
@@ -219,10 +238,15 @@ def write_tilt_series_star_from_mdoc(base: str, mdoc_path: Path, out_path: Path)
         for image in images
     }
     rows = _tilt_series_rows(images, tilt_axis_angle, defocus_by_angle)
+    # no astigmatism measurement exists in this path (DefocusV ==
+    # DefocusU above, both from .mdoc's single scalar Defocus field) --
+    # 0.0 is the honest angle, not a placeholder. See TILT_SERIES_HEADER_
+    # MDOC_ONLY's comment.
+    rows = [row + (0.0,) for row in rows]
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    _write_star(out_path, base, TILT_SERIES_HEADER, rows)
-    return {"tilt_axis_angle": tilt_axis_angle}
+    _write_star(out_path, base, TILT_SERIES_HEADER_MDOC_ONLY, rows)
+    return {"tilt_axis_angle": tilt_axis_angle, "frame_count": len(images)}
 
 
 def write_tomograms_star(cfg: dict, aretomo_out_dir: Path, mdoc_dir: Path,
@@ -270,11 +294,44 @@ def write_tomograms_star_aretomo2(cfg: dict, tomogram_dir: Path, mdoc_dir: Path,
     out_bin, amp_contrast, kv, cs, out_suffix. Optional:
     optics_group_name (default 'opticsGroup1'), defocus_handedness
     (default 1 -- no per-dataset measurement available for this path,
-    see module docstring)."""
+    see module docstring).
+
+    GOTCHA (confirmed 2026-10-22 against RELION5 5.0.1's own source,
+    src/jaz/tomography/tomogram_set.cpp): real RELION5 tomography
+    programs (relion_tomo_subtomo etc.) need rlnTomoTiltSeriesName (an
+    actual aligned tilt series stack, at the tilt series' OWN pixel size
+    -- not our bin8 RAPTOR working resolution, since rlnTomoTiltSeries
+    PixelSize is already the unbinned value with rlnTomoTomogramBinning
+    separately giving the extra factor for the 3D tomogram) and
+    rlnTomoFrameCount, or it throws "tomogramTable ... does not contain
+    a rlnMicrographName label, yet the globalTable also does not
+    contain a rlnTomoTiltSeriesName label!" and aborts. For engine:
+    imod_raptor, pass bin_dir/in_dir/bin_factor/manifest_path in cfg so
+    this can build that full-resolution aligned stack itself (via
+    imod_step.build_fullres_aligned_stack, resumable -- skips if the
+    file already exists) from RAPTOR's own .xf rescaled by bin_factor.
+    Without those cfg keys (e.g. the aretomo2 path, unverified -- no
+    equivalent convention checked yet), these two columns are omitted
+    and a warning is printed; relion_tomo_subtomo will still fail for
+    that path until it's given the same treatment."""
     tilt_series_dir = out_dir / "tilt_series"
     optics_group_name = cfg.get("optics_group_name", "opticsGroup1")
     dfhand = cfg.get("defocus_handedness", 1)
     suffix = cfg.get("out_suffix", "_AreTomo")
+
+    build_stacks = cfg.get("bin_dir") and cfg.get("in_dir") and cfg.get("bin_factor")
+    manifest = {}
+    if build_stacks:
+        import json
+        import imod_step
+        manifest_path = Path(cfg.get("manifest_path", Path(tomogram_dir) / "imod_align_manifest.json"))
+        if manifest_path.exists():
+            manifest = json.loads(manifest_path.read_text())
+        else:
+            print(f"  [WARN] {manifest_path} not found -- can't build full-resolution "
+                  f"aligned stacks; rlnTomoTiltSeriesName/rlnTomoFrameCount will be omitted")
+            build_stacks = False
+
     rows = []
     for mrc in sorted(Path(tomogram_dir).glob(f"*{suffix}.mrc")):
         if "_proj" in mrc.stem:
@@ -285,19 +342,50 @@ def write_tomograms_star_aretomo2(cfg: dict, tomogram_dir: Path, mdoc_dir: Path,
             print(f"  [SKIP] {base}: no .mdoc file found at {mdoc_path}")
             continue
         star_name = f"{base}.star"
-        write_tilt_series_star_from_mdoc(base, mdoc_path, tilt_series_dir / star_name)
-        rows.append((
+        meta = write_tilt_series_star_from_mdoc(base, mdoc_path, tilt_series_dir / star_name)
+        row = [
             base, f"tilt_series/{star_name}",
             cfg["kv"], cfg["cs"], cfg["amp_contrast"],
             cfg["pix_size"], cfg["pix_size"], cfg["out_bin"],
             dfhand, optics_group_name,
-        ))
+        ]
+
+        if build_stacks:
+            entry = manifest.get(base)
+            if entry is None:
+                # every *_final.mrc under tomogram_dir should already be
+                # in the manifest (failed tilt series never get one and
+                # never get reconstructed -- see run_imod_align/
+                # run_imod_reconstruct) -- treat a mismatch as a hard
+                # error rather than silently writing a short row that
+                # would corrupt the STAR file's fixed column count
+                raise RuntimeError(
+                    f"{base}: reconstructed as {mrc.name} but missing from "
+                    f"{manifest_path} -- can't build its full-resolution aligned stack")
+            raw_xf = Path(entry["ali_withgold"]).with_suffix(".xf")
+            original_stack = Path(cfg["in_dir"]) / f"{base}.mrc"
+            # .mrcs, not IMOD's own .ali convention -- RELION5's file-type
+            # dispatch (src/image.h) only recognizes mrc/mrcs/st/map
+            # extensions and falls back to SPIDER format otherwise,
+            # confirmed from a real run: "Invalid Spider file" on a
+            # genuine MRC stack simply because it was named *.ali
+            fullres_path = tilt_series_dir / f"{base}_fullres.mrcs"
+            if fullres_path.exists():
+                print(f"  {base}: {fullres_path.name} already exists (resuming) -- skipping")
+            else:
+                imod_step.build_fullres_aligned_stack(
+                    cfg, raw_xf, original_stack, cfg["bin_factor"], fullres_path,
+                    dry_run=False)
+            row += [str(fullres_path.resolve()), meta["frame_count"]]
+
+        rows.append(tuple(row))
 
     if not rows:
         raise RuntimeError(f"no tomograms with both an AreTomo2 output file and a .mdoc "
                             f"found (checked {tomogram_dir} / {mdoc_dir})")
 
+    header = TOMOGRAMS_HEADER_WITH_STACK if build_stacks else TOMOGRAMS_HEADER
     out_path = out_dir / "tomograms.star"
-    _write_star(out_path, "global", TOMOGRAMS_HEADER, rows)
+    _write_star(out_path, "global", header, rows)
     print(f"relion5_star: {len(rows)} tomograms -> {out_path} (mdoc-only path)")
     return out_path

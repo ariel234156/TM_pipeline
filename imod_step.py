@@ -416,6 +416,35 @@ def filtered_reconstruct(cfg: dict, ali: Path, tlt: Path, out_dir: Path, dry_run
     return reconstruct(cfg, flt_ali, tlt, out_dir, suffix="", dry_run=dry_run)
 
 
+def build_fullres_aligned_stack(cfg: dict, raw_xf: Path, original_stack: Path,
+                                 bin_factor: int, out_path: Path, dry_run: bool) -> Path:
+    """RAPTOR's .xf is solved on the BINNED stack (bin_factor), so its
+    translations are in binned-pixel units -- applying it directly to the
+    original unbinned stack would shift everything by bin_factor too
+    little. Fixed via IMOD's own xfproduct -scale (confirmed from its man
+    page: this is the documented, standard way to carry a transform
+    computed on a reduced-size stack over to the original resolution --
+    "if the first set of transforms align unbinned images, but the
+    second set refines the alignment for images binned by 2, then the
+    option -scale 1,2 would be needed"). Multiplying by an identity
+    transform as the other input isolates pure rescaling: the rotation/
+    stretch part of a transform is scale-invariant (not expressed in
+    pixel units) and comes out unchanged; only DX/DY get multiplied by
+    bin_factor (verified empirically: -46.881 * 8 = -375.048 exactly).
+    Needed for relion5_star.py's rlnTomoTiltSeriesName, which RELION5
+    requires to be an aligned stack at the tilt series' own (unbinned)
+    pixel size, not our bin8 RAPTOR working resolution."""
+    identity_xf = out_path.parent / "_identity.xf"
+    scaled_xf = out_path.parent / f"{out_path.stem}_fullres.xf"
+    if not dry_run:
+        identity_xf.write_text("1 0 0 1 0 0\n")
+    _run([_bin(cfg, "xfproduct"), "-in1", str(identity_xf), "-in2", str(raw_xf),
+          "-scale", f"1,{bin_factor}", "-output", str(scaled_xf)], dry_run, cfg)
+    _run([_bin(cfg, "newstack"), "-xform", str(scaled_xf), str(original_stack),
+          str(out_path)], dry_run, cfg)
+    return out_path
+
+
 def _extra_args(flags: dict) -> list:
     # IMOD's PIP-based argument parser (confirmed 2026-10-21 against a
     # real run + a synthetic MRC test): a multi-value option needs its
