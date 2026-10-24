@@ -416,6 +416,23 @@ isonet:
 #   create_mask:
 #     sigma: 1.0                       # gaussian drop-off at mask edges, in pixels
 #
+# GOTCHA (investigated and REJECTED 2026-10-24, imod_raptor + gold
+# fiducial data): if picks look like they're landing on leftover gold
+# after imod.erase_gold, don't assume it without checking -- a
+# findbeads3d-based exclusion mask was built and tested here, but a
+# proper random-baseline statistical check (real pick positions vs.
+# uniform-random points, both measured against candidate gold sites)
+# showed real picks land near gold candidates NO more often than chance
+# (z-scores ~0-2 across several radii). The earlier "X% of picks near
+# gold" read, done without that baseline, was a base-rate artifact of
+# how much area that many candidate disks simply cover. Gold erasure
+# itself WAS confirmed measurably incomplete at real bead sites (root
+# cause: beads project as ellipses at high tilt angles -- e.g. 2x
+# elongation at +/-60 deg -- so a fixed circular erasure radius can't
+# fully cover them), but since it didn't bias picks, it was left as a
+# cosmetic limitation. Before building a gold exclusion mask for a new
+# dataset, run that random-baseline check first -- don't eyeball it.
+#
 #   match_template:
 #     tilt_angles: [-60, 60]           # or a .tlt/.rawtlt file path instead of [min, max]
 #     # low_pass: 20                   # resolution in A, if the template was pre-filtered to one

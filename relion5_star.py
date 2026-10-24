@@ -342,9 +342,19 @@ def write_tomograms_star_aretomo2(cfg: dict, tomogram_dir: Path, mdoc_dir: Path,
             print(f"  [SKIP] {base}: no .mdoc file found at {mdoc_path}")
             continue
         star_name = f"{base}.star"
-        meta = write_tilt_series_star_from_mdoc(base, mdoc_path, tilt_series_dir / star_name)
+        tilt_series_star_path = tilt_series_dir / star_name
+        meta = write_tilt_series_star_from_mdoc(base, mdoc_path, tilt_series_star_path)
         row = [
-            base, f"tilt_series/{star_name}",
+            # absolute, not "tilt_series/<name>" -- a relative path only
+            # resolves correctly when RELION5 is run with THIS out_dir as
+            # its cwd/project root. Confirmed empirically: a separate
+            # RELION5 GUI project rooted elsewhere (its own tomograms.star
+            # copy, refreshed independently of this one) resolved the
+            # relative path against ITS OWN directory instead and picked
+            # up a stale tilt_series/<base>.star left over from before a
+            # fix here, surfacing as a confusing missing-label error
+            # pointing at the right filename but wrong, stale content.
+            base, str(tilt_series_star_path.resolve()),
             cfg["kv"], cfg["cs"], cfg["amp_contrast"],
             cfg["pix_size"], cfg["pix_size"], cfg["out_bin"],
             dfhand, optics_group_name,
