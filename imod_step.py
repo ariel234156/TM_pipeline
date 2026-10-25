@@ -276,7 +276,8 @@ def run_raptor(cfg: dict, binned_stack: Path, out_dir: Path, exec_path: str, dry
     if dry_run:
         _run([_bin(cfg, "newstack"), "-xform", str(xf_dst), str(binned_stack), str(ali_dst)],
              dry_run, cfg)
-        return {"ali": ali_dst, "tlt": tlt_dst, "xf": xf_dst, "fid_txt": fid_dst, "base": base}
+        return {"ali": ali_dst, "tlt": tlt_dst, "xf": xf_dst, "fid_txt": fid_dst, "base": base,
+                "stack": binned_stack}
 
     (raptor_scratch / "IMOD" / f"{base}.tlt").rename(tlt_dst)
     (raptor_scratch / "IMOD" / f"{base}.xf").rename(xf_dst)
@@ -311,67 +312,103 @@ def run_raptor(cfg: dict, binned_stack: Path, out_dir: Path, exec_path: str, dry
              dry_run, cfg)
 
     shutil.rmtree(raptor_scratch, ignore_errors=True)
-    return {"ali": ali_dst, "tlt": tlt_dst, "xf": xf_dst, "fid_txt": fid_dst, "base": base}
+    return {"ali": ali_dst, "tlt": tlt_dst, "xf": xf_dst, "fid_txt": fid_dst, "base": base,
+                "stack": binned_stack}
 
 
 def erase_gold(cfg: dict, raptor_result: dict, out_dir: Path, dry_run: bool) -> Path:
-    """Optional (imod.erase_gold.enabled): convert RAPTOR's text fiducial
-    model (*.fid.txt) to a binary IMOD model with point2model -scat, then
-    ccderaser -circle to erase each tracked bead position from the
-    aligned stack -- the standard IMOD "erase gold" step, done here BEFORE
-    reconstruction so the gold-erased version is what gets reconstructed.
-    Returns the gold-erased .ali path.
+    """Optional (imod.erase_gold.enabled): erase every gold bead, then
+    build the no-gold aligned stack with the SAME .xf as the with-gold one.
+    Returns the no-gold .ali path. Steps (all plain IMOD tools):
 
-    GOTCHA (confirmed empirically, 2026-10-21): RAPTOR's *.fid.txt is NOT
-    a plain point list -- it's a full ASCII model dump with ~24 header
-    lines (imod/max/offsets/.../contour) PLUS a repeated "object .../
-    contour ..." marker line before every single contour (64 of them on
-    a real test file, one pair per tracked bead trajectory). point2model
-    expects pure "x y z" data lines only and fails immediately on the
-    first header line ("ERROR: point2model - There must be at least 2
-    values on the first line"). Filtered here to lines that actually
-    start with a number -- every header/marker line starts with a word,
-    so this cleanly extracts just the point data regardless of how many
-    contours there are, with no need to know the exact header length (it
-    varies). This collapses all per-bead contours into one flat
-    scattered-point object, which is fine for -scat/-circle erasure
-    (ccderaser just erases a circle at every point, independent of which
-    trajectory it came from)."""
+      1. bead positions = RAPTOR's tracked points (*.fid.txt) + every bead
+         imodfindbeads finds in each raw tilt image (-store -1: all peaks
+         above its own histogram dip -- dataset-independent);
+      2. point2model -scat (default Z convention) -> one scattered-point
+         object;
+      3. ccderaser -circle 1 -better R -order 0 -merge -exclude on the RAW
+         binned stack;
+      4. newstack -xform <.xf> on the erased raw stack -> <base>_noGold.ali.
+
+    BUG FIXED (confirmed 2026-10-25): this used to run ccderaser on the
+    ALIGNED stack with RAPTOR's points, but those points are in RAW-stack
+    coordinates (RAPTOR tracks on the raw binned stack, like IMOD's
+    beadtrack). Measured on Position_1_3: 98% of the points sit on a dark
+    bead in the raw stack (median -5.9 sigma), 5% (= chance) in the aligned
+    stack -- every erase circle landed ~50 px off its bead, so the old
+    "no-gold" tomogram was visually identical to the with-gold one.
+    Erasing on the raw stack, where the points are valid, avoids any
+    coordinate conversion; the no-gold .ali then has exactly the with-gold
+    .ali's geometry.
+
+    Why imodfindbeads too: RAPTOR only tracks the beads it needs for the
+    alignment. On Position_1_3, RAPTOR-only erasure left ~13 bead-like
+    blobs per aligned tilt image (from 51); adding imodfindbeads' beads
+    left ~7. Its extra detections were nearly as dark as the tracked gold
+    (median -4.9 vs -5.9 sigma), and the average ferritin ring profile at
+    all 68 picked particles was unchanged after erasing -- ferritin is not
+    erased.
+
+    Z convention: RAPTOR's fid.txt and model2point's default output both
+    use IMOD model coordinates (section k centered at z=k), which is
+    point2model's default -- do NOT pass -zcoord.
+
+    Radius: averaged over ~2200 raw bead patches, the dark core ends at
+    r~5 px (imodfindbeads measures 10.7 px diameter, matching
+    gold_diameter_px) with a faint bright Fresnel fringe out to r~8, so
+    the default radius is round(0.75 * gold_diameter_px) (= 8 for 11 px).
+    -order 0 fills with the border mean instead of extrapolating a
+    quadratic. Override with erase_gold.better_radius_px;
+    erase_gold.find_untracked: false disables step 1's imodfindbeads part;
+    any other erase_gold keys are passed through to ccderaser."""
     base = raptor_result["base"]
+    stack = Path(raptor_result["stack"])
     eg_cfg = dict(cfg.get("erase_gold", {}))
     eg_cfg.pop("enabled", None)
-    fid_mod = out_dir / f"{base}_fid.mod"
-
-    fid_points = out_dir / f"{base}_fid_points.txt"
-    if dry_run:
-        _run([_bin(cfg, "point2model"), "-scat",
-              "-input", str(fid_points), "-output", str(fid_mod)], dry_run, cfg)
-    else:
-        point_re = re.compile(r"^-?\d")
-        lines = [ln for ln in Path(raptor_result["fid_txt"]).read_text().splitlines()
-                 if point_re.match(ln)]
-        fid_points.write_text("\n".join(lines) + "\n")
-        _run([_bin(cfg, "point2model"), "-scat",
-              "-input", str(fid_points), "-output", str(fid_mod)], dry_run, cfg)
-
-    erased_ali = out_dir / f"{base}_noGold.ali"
-    # point2model -scat above gives every point "no individual size", and
-    # ccderaser's -circle flag here means "object 1 holds scattered points"
-    # (NOT a radius -- that's a different flag with the same name in
-    # point2model). The actual erase radius comes from -better, which
-    # defaults to gold_diameter_px/2 so the erased circle actually covers
-    # the bead instead of leaving most of it visible.
+    find_untracked = eg_cfg.pop("find_untracked", True)
     better_radius = eg_cfg.pop("better_radius_px", None)
     if better_radius is None:
-        better_radius = round(gold_diameter_px(cfg) / 2)
+        better_radius = round(0.75 * gold_diameter_px(cfg))
+
+    points = out_dir / f"{base}_erase_points.txt"
+    erase_mod = out_dir / f"{base}_erase.mod"
+    found_mod = out_dir / f"{base}_findbeads.mod"
+    found_pts = out_dir / f"{base}_findbeads.txt"
+    erased_stack = out_dir / f"{base}_noGold.st"
+    erased_ali = out_dir / f"{base}_noGold.ali"
+
+    if find_untracked:
+        _run([_bin(cfg, "imodfindbeads"), "-input", str(stack), "-output", str(found_mod),
+              "-size", str(gold_diameter_px(cfg)), "-store", "-1"], dry_run, cfg)
+        _run([_bin(cfg, "model2point"), "-float", "-input", str(found_mod),
+              "-output", str(found_pts)], dry_run, cfg)
+
+    if not dry_run:
+        point_re = re.compile(r"^-?\d")
+        lines = [" ".join(ln.split()[:3])
+                 for ln in Path(raptor_result["fid_txt"]).read_text().splitlines()
+                 if point_re.match(ln)]
+        if find_untracked:
+            lines += [" ".join(ln.split()[:3]) for ln in found_pts.read_text().splitlines()
+                      if ln.strip()]
+        points.write_text("\n".join(lines) + "\n")
+    _run([_bin(cfg, "point2model"), "-scat", "-input", str(points),
+          "-output", str(erase_mod)], dry_run, cfg)
+
     cmd = [_bin(cfg, "ccderaser"),
-           "-input", str(raptor_result["ali"]),
-           "-output", str(erased_ali),
-           "-model", str(fid_mod),
+           "-input", str(stack),
+           "-output", str(erased_stack),
+           "-model", str(erase_mod),
            "-circle", "1",
-           "-better", str(better_radius)]
+           "-better", str(better_radius),
+           "-order", "0",
+           "-merge",
+           "-exclude"]
     cmd += _extra_args(eg_cfg)
     _run(cmd, dry_run, cfg)
+
+    _run([_bin(cfg, "newstack"), "-xform", str(raptor_result["xf"]),
+          str(erased_stack), str(erased_ali)], dry_run, cfg)
     return erased_ali
 
 

@@ -168,8 +168,16 @@ aretomo:
 #     # relion5_star/downstream IsoNet2 use) is built from the NO-GOLD
 #     # reconstruction specifically -- downstream processing continues on
 #     # the gold-erased tomogram.
-#     enabled: false         # remove tracked gold fiducials from the aligned stack before reconstruction
-#     better_radius_px: null # override erase radius (px); null = use ccderaser's own default
+#     # How: the beads RAPTOR tracked + every bead imodfindbeads finds are
+#     # erased on the RAW binned stack (where those coordinates are valid),
+#     # then that stack is aligned with the same .xf as the with-gold one
+#     # (see imod_step.erase_gold's docstring). To regenerate existing
+#     # no-gold stacks, move <base>_bin8_noGold.ali aside and re-run
+#     # imod_align -- it erases from the files on disk without re-running
+#     # RAPTOR, then re-run imod_reconstruct.
+#     enabled: false
+#     find_untracked: true   # also erase beads RAPTOR didn't track (imodfindbeads); false = RAPTOR's beads only
+#     better_radius_px: null # erase radius (px); null = round(0.75 * gold diameter px) -- covers core + Fresnel fringe
 #   raptor:
 #     markers_per_image: null  # null = let RAPTOR auto-estimate (recommended to start)
 #     xray: false            # RAPTOR's own -xray: strip strong line features before marker detection

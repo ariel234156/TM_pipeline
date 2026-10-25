@@ -258,6 +258,25 @@ def run_imod_align(cfg: dict, dry_run: bool) -> Path:
             print(f"imod_align: {base_guess} already aligned (resuming) -- skipping")
             continue
 
+        if (wants_nogold and existing and Path(existing["ali_withgold"]).exists()
+                and Path(existing["tlt"]).exists()):
+            # aligned already, only the no-gold stack is missing: erase
+            # gold from the files on disk instead of re-running RAPTOR
+            withgold = Path(existing["ali_withgold"])
+            raptor_result = {"ali": withgold, "tlt": Path(existing["tlt"]),
+                             "xf": withgold.with_suffix(".xf"),
+                             "fid_txt": withgold.with_suffix(".fid.txt"),
+                             "stack": withgold.with_suffix(".st"), "base": withgold.stem}
+            try:
+                existing["ali_nogold"] = str(
+                    imod_step.erase_gold(cfg, raptor_result, out_dir, dry_run))
+                manifest_path.write_text(json.dumps(manifest, indent=2))
+                print(f"imod_align: {base_guess} already aligned -- regenerated no-gold stack only")
+            except Exception as exc:
+                print(f"imod_align: {base_guess} gold erasure FAILED ({type(exc).__name__}: {exc})")
+                failed.append(base_guess)
+            continue
+
         try:
             if mode == "eer":
                 stack, base = imod_step.align_frames_eer(cfg, path, out_dir, dry_run)
