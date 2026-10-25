@@ -137,10 +137,15 @@ def match_template_batch(cfg: dict, template_file: Path, mask_file: Path,
     destinations = {}
 
     mrc_files = sorted(Path(tomogram_dir).glob("*.mrc"))
+    if not mrc_files and dry_run:
+        print(f"+ [dry-run] would run pytom_match_template.py on every *.mrc in {tomogram_dir} "
+              f"({'--relion5-tomograms-star ' + str(relion5_star) if relion5_star else '--voxel-size-angstrom'})")
+        return destinations
     if not mrc_files:
         raise RuntimeError(f"no .mrc tomograms found in {tomogram_dir}")
 
     if relion5_star and not dry_run:
+        _check_voxel_size_against_star(cfg, Path(relion5_star))
         clean_names = _read_clean_tomo_names(Path(relion5_star))
         symlink_dir = Path(cfg["out_dir"]) / "tomograms_relion5"
         symlink_dir.mkdir(parents=True, exist_ok=True)
@@ -151,8 +156,9 @@ def match_template_batch(cfg: dict, template_file: Path, mask_file: Path,
                 raise RuntimeError(f"no clean rlnTomoName found inside {tomo.stem!r} "
                                     f"(from {tomo}) -- checked against {clean_names}")
             link = symlink_dir / f"{max(matches, key=len)}.mrc"
-            if not link.exists():
-                link.symlink_to(tomo.resolve())
+            if link.is_symlink() or link.exists():
+                link.unlink()  # never reuse a stale/broken link from an earlier run
+            link.symlink_to(tomo.resolve())
             renamed.append(link)
         mrc_files = renamed
 
@@ -219,6 +225,27 @@ def extract_candidates_batch(cfg: dict, destinations: dict, dry_run: bool) -> li
     return star_files
 
 
+def _check_voxel_size_against_star(cfg: dict, tomograms_star: Path) -> None:
+    """With --relion5-tomograms-star, matching takes its voxel size from
+    tomograms.star (rlnTomoTiltSeriesPixelSize * rlnTomoTomogramBinning),
+    but template.mrc/mask.mrc are still built at pytom.voxel_size_angstrom.
+    If those disagree the template is at the wrong scale (the 0.305 vs 9.12
+    A bug, again) -- refuse to run rather than produce garbage."""
+    import starfile
+    df = starfile.read(tomograms_star)
+    if isinstance(df, dict):
+        df = next(iter(df.values()))
+    star_vs = set((df["rlnTomoTiltSeriesPixelSize"] * df["rlnTomoTomogramBinning"]).round(4))
+    cfg_vs = float(cfg["voxel_size_angstrom"])
+    bad = [v for v in star_vs if abs(v - cfg_vs) > 0.01 * cfg_vs]
+    if bad:
+        raise RuntimeError(
+            f"pytom.voxel_size_angstrom = {cfg_vs} but {tomograms_star} implies tomogram voxel "
+            f"size(s) {sorted(star_vs)} A (rlnTomoTiltSeriesPixelSize * rlnTomoTomogramBinning). "
+            f"template.mrc/mask.mrc are built at voxel_size_angstrom, so fix it to match and "
+            f"re-run tm_template/tm_mask first")
+
+
 def _read_clean_tomo_names(tomograms_star: Path) -> list:
     import starfile
     df = starfile.read(tomograms_star)
@@ -266,6 +293,12 @@ def merge_stars(cfg: dict, dry_run: bool) -> Path:
     merge_input_dir.mkdir(parents=True, exist_ok=True)
     if not dry_run:
         import os
+        # pytom_merge_stars.py merges EVERY *.star in this dir, so links
+        # left from an earlier run (e.g. different tomogram names) would
+        # silently end up in the merged file -- clear our own links first
+        for old in merge_input_dir.glob("*.star"):
+            if old.is_symlink():
+                old.unlink()
         for star in sorted(match_dir.glob("*/*_particles.star")):
             link = merge_input_dir / f"{star.parent.name}_{star.name}"
             if link.exists() or link.is_symlink():

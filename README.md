@@ -9,8 +9,8 @@ input — every parameter lives in the config, not in code.
 Pipeline stages: `aretomo` → `imod_align` → `imod_reconstruct` →
 `relion5_star` → `organize` → `prepare_star` → `deconv` → `make_mask` →
 `refine` → `predict` → `tm_template` → `tm_mask` → `tm_match` →
-`tm_extract` → `tm_merge` (`imod_align`/`imod_reconstruct`, `relion5_star`
-and the five `tm_*` stages are optional — only relevant for their
+`tm_extract` → `tm_merge` → `tm_figure` (`imod_align`/`imod_reconstruct`,
+`relion5_star` and the six `tm_*` stages are optional — only relevant for their
 respective engine/feature, see below).
 
 Three alignment engines are supported via the `engine` config key:
@@ -100,6 +100,7 @@ background rather than in a session that might get interrupted.
 | `organize_for_isonet2.py` | Organizes AreTomo3's EVN/ODD volumes into IsoNet2's expected layout |
 | `relion5_star.py` | Generates a RELION5-compatible `tomograms.star` from any engine's output (optional, `relion5_star` stage) |
 | `pytom_step.py` | Template matching via PyTom's pytom-match-pick toolkit (optional, `tm_*` stages) |
+| `visualize_picks.py` | Picks-overview PNG (the `tm_figure` stage; also runnable on its own) |
 | `pipeline_config.example.yaml` | Template config — copy to `pipeline_config.yaml` and edit |
 | `config_editor.py` | Local web form for editing the config |
 | `requirements.txt` | Python dependencies (just PyYAML) |
@@ -118,17 +119,26 @@ markers — RAPTOR can't align without them. Two input modes
 
 From there (`imod_align` stage): `extracttilts` → `ccderaser -find`
 (x-ray/hot-pixel removal, optional) → `newstack` (bin + normalize) →
-`RAPTOR` (fiducial tracking + alignment) → optional gold-fiducial erasure
-(`point2model` + `ccderaser -circle`, using RAPTOR's own tracked `.fid.txt`
-model — `imod.erase_gold.enabled`). Then (`imod_reconstruct` stage): `tilt`
-WBP reconstruction, optionally also a `-FakeSIRTiterations` variant and an
-`mtffilter`-filtered variant; `imod.feed_variant` picks which one becomes
-the `<base><imod.out_suffix>.mrc` that `organize`/`relion5_star` look for.
+`RAPTOR` (fiducial tracking + alignment) → optional gold erasure
+(`imod.erase_gold.enabled`): the beads RAPTOR tracked plus every bead
+`imodfindbeads` finds in each tilt image are erased with `ccderaser
+-circle` on the **raw** binned stack (RAPTOR's `.fid.txt` is in raw-stack
+coordinates), and that erased stack is then aligned with the same `.xf`.
+Every tilt series is then reconstructed both ways (`imod_reconstruct`
+stage): `tilt` WBP, optionally also a `-FakeSIRTiterations` variant and an
+`mtffilter`-filtered variant, with and without gold. `imod.feed_variant`
+picks which variant becomes the `<base><imod.out_suffix>.mrc` that
+`organize`/`relion5_star` look for — always the gold-erased one when
+erasure is enabled (a tilt series without a gold-erased stack is skipped,
+never fed downstream with its gold).
 
-**Caveat**: every flag was verified against a real IMOD install's
-`--help`/man-page text, but no fiducial-containing dataset was available
-to run RAPTOR itself end-to-end when this was built — validate your first
-real run carefully.
+Validated end-to-end on a real gold-fiducial ferritin dataset (bead-like
+spots per aligned tilt image 50–66 → 2–12, ferritin signal at picked
+particles unchanged). Use IMOD ≥ 5.1.13: 5.1.0's `tiltalign` crashes
+intermittently inside RAPTOR. RAPTOR can still occasionally fail on a
+tilt series — `imod_align` skips it, keeps going, and resumes on re-run
+(it also re-erases gold from existing alignments without re-running
+RAPTOR if only the gold-erased stack is missing).
 
 ## Template matching (optional)
 
@@ -139,13 +149,23 @@ IsoNet2-denoised tomograms from `predict`, given a reference density map
 separate PyTom install (its own conda env, e.g. `pytom_tm`) — set
 `pytom.bin_dir` to that env's `bin/` directory.
 
-**Known gotcha**: IsoNet2's `predict` step does not write the tomogram's
-real pixel size into its output MRC header (observed: header always says
-1.0 Å/px). `pytom_step.py` always passes `voxel_size_angstrom` from the
-config explicitly rather than trusting the tomogram's own header — make
-sure that value matches your actual data. You'll see a `WARNING: Provided
-voxel size does not match voxel size annotated in tomogram/template mrc.`
-on every run because of this; that's expected.
+**Voxel size**: never trust the tomogram's own MRC header (IsoNet2's
+`predict` has written a wrong one). `pytom.voxel_size_angstrom` must be the
+tomogram's real spacing = tilt-series pixel size × tomogram binning (the
+template and mask are built at it); `pytom.reference_map_voxel_size_angstrom`
+is the reference map's own spacing. You'll see `WARNING: Provided voxel
+size does not match voxel size annotated in tomogram/template mrc.` on
+every run; that's expected.
+
+**CTF/dose-weighted matching** (recommended with `relion5_star`): set
+`pytom.relion5_tomograms_star` to the `tomograms.star` written by the
+`relion5_star` stage. Matching then takes voxel size, tilt angles, dose and
+per-tilt CTF straight from it (pytom's own `--relion5-tomograms-star`), and
+refuses to run if that voxel size disagrees with `pytom.voxel_size_angstrom`.
+
+**`tm_figure`** writes one PNG (`pytom.figure.out_name`, default
+`picks_overview.png` in `pytom.out_dir`) with every tomogram's central XY
+slice and its picks overlaid — check it before using the particles.
 
 For RELION5-compatible output: set `"relion5-compat": true` under
 `pytom.extract_candidates` to get `particles.star` with centered
@@ -158,8 +178,11 @@ own, so per-image defocus comes from the `.mdoc`'s own SerialEM-measured
 value instead). The `engine: aretomo3` path's schema was verified against
 both PyTom's own RELION5 reader and a real `relion_tomo_import SerialEM`
 run (row order, pre-exposure convention, and column set all matched
-exactly); the `aretomo2`/`imod_raptor` paths have only been checked against
-PyTom's reader, not a real RELION5 import.
+exactly). The `imod_raptor` path writes everything RELION5's tomography
+programs need (`rlnTomoTiltSeriesName` pointing at a full-resolution
+aligned stack, `rlnTomoSizeX/Y/Z`, defocus in Å) and was verified with a
+real `relion_tomo_subtomo` run (all picked particles extracted); the
+`aretomo2` path has only been checked against PyTom's reader.
 
 ## Known gotchas
 

@@ -18,11 +18,14 @@ file with a YAML dumper, so every comment (including the AreTomo3-segfault
 and epochs/save_interval gotcha notes) survives untouched.
 
 Scope: only fields already active (uncommented) in the YAML are editable
-here. Commented-out advanced options (predict.model, refine.pretrained_model,
-organize.pixel_size override, prepare_star.number_subtomos, the aretomo
-"extra:" passthrough) still need a manual edit -- editing those safely would
-require deciding how to (re)comment a line, which this tool intentionally
-does not guess at.
+here. A listed field that is commented out or absent (e.g. the whole PyTom
+section in a config freshly copied from pipeline_config.example.yaml) is
+shown greyed out and left alone on save -- uncomment it in the YAML to edit
+it here. Advanced options not listed at all (predict.model,
+refine.pretrained_model, organize.pixel_size override,
+prepare_star.number_subtomos, the aretomo "extra:" passthrough) still need a
+manual edit -- editing those safely would require deciding how to
+(re)comment a line, which this tool intentionally does not guess at.
 
 This does NOT run the pipeline -- it only edits the config. Run
 run_pipeline.py yourself afterward, as before.
@@ -108,7 +111,7 @@ SECTIONS = [
         ("aretomo2.gpu", "GPU IDs", "intlist"),
     ], "aretomo2"),
     ("IMOD + RAPTOR -- raw paths / input", [
-        ("imod.bin_dir", "IMOD bin/ dir (e.g. /usr/local/imod_5.1.0/bin)", "path"),
+        ("imod.bin_dir", "IMOD bin/ dir (use IMOD >= 5.1.13 -- 5.1.0's tiltalign crashes)", "path"),
         ("imod.input_mode", "Input mode", "select",
          [("eer", "eer (raw EER frames + .mdoc, via alignframes)"),
           ("mrc", "mrc (pre-assembled tilt series .st/.mrc)")]),
@@ -126,8 +129,9 @@ SECTIONS = [
         ("imod.out_suffix", "Final tomogram filename suffix", "str"),
         ("imod.feed_variant", "Variant fed downstream (wbp | fake_sirt | filtered)", "str"),
         ("imod.xray_removal.enabled", "Remove X-rays/hot pixels (ccderaser) before binning", "bool"),
-        ("imod.erase_gold.enabled", "Erase gold fiducials after alignment (before reconstruction)", "bool"),
-        ("imod.erase_gold.better_radius_px", "Gold erase radius override (px, blank=default)", "str_or_null"),
+        ("imod.erase_gold.enabled", "Also make a gold-erased tomogram (downstream uses it)", "bool"),
+        ("imod.erase_gold.find_untracked", "Also erase beads RAPTOR didn't track (imodfindbeads)", "bool"),
+        ("imod.erase_gold.better_radius_px", "Gold erase radius (px, blank = 0.75 x bead diameter)", "str_or_null"),
         ("imod.raptor.markers_per_image", "Markers to track per image (blank=auto-estimate)", "str_or_null"),
         ("imod.raptor.xray", "RAPTOR: remove strong line features before tracking", "bool"),
         ("imod.reconstruction.fake_sirt_iterations", "FakeSIRT iterations (blank=skip this variant)", "str_or_null"),
@@ -193,15 +197,24 @@ SECTIONS = [
     ], None),
     ("PyTom -- template matching (optional)", [
         ("pytom.bin_dir", "pytom_tm conda env's bin/ dir", "path"),
+        ("pytom.relion5_tomograms_star", "RELION5 tomograms.star (blank = off; on = CTF+dose-weighted matching)", "str_or_null"),
         ("pytom.reference_map", "Reference density map (MRC)", "path"),
+        ("pytom.reference_map_voxel_size_angstrom", "Reference map's own voxel size (A)", "float"),
         ("pytom.particle_diameter_angstrom", "Particle diameter (A)", "float"),
-        ("pytom.voxel_size_angstrom", "Voxel size (A) -- must match predict's REAL output pixel size, not its MRC header", "float"),
+        ("pytom.voxel_size_angstrom", "Tomogram voxel size (A) = tilt pixel size x tomogram binning", "float"),
         ("pytom.out_dir", "Output dir", "path"),
         ("pytom.gpu", "GPU IDs", "intlist"),
+        ("pytom.create_template.invert", "Invert template contrast", "bool"),
         ("pytom.create_mask.sigma", "Mask edge drop-off (px)", "float"),
-        ("pytom.match_template.tilt_angles", "Tilt angles (min max)", "intlist"),
+        ("pytom.match_template.tilt_angles", "Tilt angles (min max) -- ignored when tomograms.star is set", "intlist"),
+        ("pytom.match_template.low-pass", "Low-pass for matching (A) -- the main speed lever", "float"),
+        ("pytom.match_template.volume-split", "Volume split (x y z) -- product must equal the number of GPUs", "intlist"),
+        ("pytom.match_template.half-precision", "Half precision (float16)", "bool"),
         ("pytom.extract_candidates.number_of_particles", "Max particles to extract per tomogram", "int"),
+        ("pytom.extract_candidates.cut-off", "Score cut-off (comment the line out in the YAML for pytom's automatic estimate)", "float"),
         ("pytom.extract_candidates.relion5-compat", "RELION5-compatible coordinates (particles.star)", "bool"),
+        ("pytom.figure.out_name", "Picks overview PNG filename (tm_figure stage)", "str"),
+        ("pytom.figure.z_slab_px", "Picks overview: solid circles within this many px of the central slice", "int"),
     ], None),
 ]
 
@@ -280,7 +293,7 @@ def display_value(kind: str, value) -> str:
     return str(value)
 
 
-def render_form(cfg: dict, message: str = "", error: str = "") -> str:
+def render_form(cfg: dict, active: set, message: str = "", error: str = "") -> str:
     parts = ["""<!doctype html><html><head><meta charset="utf-8">
 <title>Pipeline config editor</title>
 <style>
@@ -295,6 +308,8 @@ h1{font-size:1.4rem} h2{font-size:1.05rem;margin-top:2rem;border-bottom:1px soli
 .msg.err{background:#fbe2e2;color:#7a1414}
 button{padding:.6rem 1.4rem;font-size:.95rem;margin-top:1.5rem;cursor:pointer}
 .note{color:#666;font-size:.8rem;margin-top:.3rem}
+.field.off label{color:#999}
+.field .why{color:#999;font-size:.75rem}
 section[hidden]{display:none}
 </style></head><body>
 <h1>AreTomo3 / AreTomo2 / IMOD+RAPTOR / IsoNet2 pipeline config</h1>
@@ -313,6 +328,15 @@ section[hidden]{display:none}
             value = get_by_path(cfg, path)
             name = html.escape(path)
             lbl = html.escape(label)
+            if path not in active:
+                # commented out / absent in the YAML: shown, not editable,
+                # and not submitted (disabled), so save leaves it alone
+                parts.append(
+                    f'<div class="field off"><label for="{name}">{lbl}</label>'
+                    f'<input type="text" id="{name}" disabled value="">'
+                    f'<span class="why">not in config file</span></div>'
+                )
+                continue
             if kind == "bool":
                 checked = "checked" if value else ""
                 parts.append(
@@ -367,18 +391,21 @@ def apply_updates(config_path: Path, form: dict) -> None:
     index = index_paths(lines)
 
     for path, label, kind in all_fields():
+        if path not in index:
+            if path not in form:
+                continue  # greyed-out field (not in the file): leave it alone
+            # submitted but not an active line -- refuse rather than guess
+            raise ValueError(
+                f"'{label}' ({path}) isn't an active (uncommented) line in "
+                f"{config_path.name} -- this editor can't add new lines, "
+                f"only edit existing ones. Uncomment it manually first."
+            )
         if kind == "bool":
             raw = "1" if path in form else ""
         else:
             raw = form.get(path, [""])[0]
         new_value_text = format_value(kind, raw)
 
-        if path not in index:
-            raise ValueError(
-                f"'{label}' ({path}) isn't an active (uncommented) line in "
-                f"{config_path.name} -- this editor can't add new lines, "
-                f"only edit existing ones. Uncomment it manually first."
-            )
         line_idx = index[path]
         m = VALUE_RE.match(lines[line_idx])
         if not m:
@@ -406,8 +433,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path not in ("/", ""):
             self._send_html("Not found", 404)
             return
-        cfg = yaml.safe_load(self.config_path.read_text())
-        self._send_html(render_form(cfg))
+        self._send_html(self._form())
 
     def do_POST(self):
         if self.path != "/save":
@@ -418,11 +444,13 @@ class Handler(BaseHTTPRequestHandler):
         form = parse_qs(body, keep_blank_values=True)
         try:
             apply_updates(self.config_path, form)
-            cfg = yaml.safe_load(self.config_path.read_text())
-            self._send_html(render_form(cfg, message=f"Saved to {self.config_path}"))
+            self._send_html(self._form(message=f"Saved to {self.config_path}"))
         except Exception as exc:
-            cfg = yaml.safe_load(self.config_path.read_text())
-            self._send_html(render_form(cfg, error=f"Not saved -- {exc}"), status=400)
+            self._send_html(self._form(error=f"Not saved -- {exc}"), status=400)
+
+    def _form(self, **kw) -> str:
+        text = self.config_path.read_text()
+        return render_form(yaml.safe_load(text), set(index_paths(text.split("\n"))), **kw)
 
 
 def main():

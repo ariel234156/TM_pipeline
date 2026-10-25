@@ -240,8 +240,10 @@ def run_imod_align(cfg: dict, dry_run: bool) -> Path:
     failed = []
     for mode, path in inputs:
         if dry_run:
+            gold = (" + gold erasure (imodfindbeads/ccderaser on the raw stack, newstack -xform)"
+                    if cfg.get("erase_gold", {}).get("enabled", False) else "")
             print(f"+ [dry-run] would process {path} (mode={mode}) through "
-                  f"alignframes/extracttilts/ccderaser/newstack/RAPTOR")
+                  f"alignframes/extracttilts/ccderaser/newstack/RAPTOR{gold}")
             base = path.stem
             manifest[base] = {"ali_withgold": str(out_dir / f"{base}_PLACEHOLDER.ali"),
                                "tlt": str(out_dir / f"{base}_PLACEHOLDER.tlt"),
@@ -369,14 +371,26 @@ def run_imod_reconstruct(cfg: dict, dry_run: bool) -> Path:
                 chosen = flt_path
         return chosen
 
+    wants_nogold = cfg.get("erase_gold", {}).get("enabled", False)
+    skipped = []
     for base, entry in manifest.items():
         tlt = Path(entry["tlt"])
+        final_path = out_dir / f"{base}{final_suffix}.mrc"
+        nogold = entry.get("ali_nogold")
+        if wants_nogold and not dry_run and not (nogold and Path(nogold).exists()):
+            # downstream must only ever see gold-erased tomograms when
+            # erase_gold is on -- never fall back to the with-gold one
+            print(f"imod_reconstruct: {base} has no no-gold stack -- skipped (re-run "
+                  f"imod_align to erase its gold); excluded from downstream stages")
+            if final_path.exists() or final_path.is_symlink():
+                final_path.unlink()
+            skipped.append(base)
+            continue
         chosen_withgold = _reconstruct_one(Path(entry["ali_withgold"]), tlt)
         chosen_feed = chosen_withgold
-        if entry.get("ali_nogold"):
-            chosen_feed = _reconstruct_one(Path(entry["ali_nogold"]), tlt)
+        if nogold:
+            chosen_feed = _reconstruct_one(Path(nogold), tlt)
 
-        final_path = out_dir / f"{base}{final_suffix}.mrc"
         if dry_run:
             print(f"+ [dry-run] would symlink {chosen_feed} -> {final_path}")
         else:
@@ -384,8 +398,10 @@ def run_imod_reconstruct(cfg: dict, dry_run: bool) -> Path:
                 final_path.unlink()
             os.symlink(chosen_feed.resolve(), final_path)
 
-    print(f"imod_reconstruct: {len(manifest)} tomograms -> {out_dir} "
+    print(f"imod_reconstruct: {len(manifest) - len(skipped)} tomograms -> {out_dir} "
           f"(feed variant: {feed_variant}{final_suffix}.mrc)")
+    if skipped:
+        print(f"imod_reconstruct: {len(skipped)} skipped (no no-gold stack): {', '.join(skipped)}")
     return out_dir
 
 
@@ -649,7 +665,11 @@ def main():
         rf_cfg = dict(isonet_cfg.get("refine", {}))
         top_ctf_n = rf_cfg.pop("top_ctf_n", None)
         refine_star_file = star_file
-        if top_ctf_n:
+        if top_ctf_n and args.dry_run and not Path(star_file).exists():
+            # prepare_star hasn't really run in a dry-run, so there are no
+            # rows to rank yet
+            print(f"+ [dry-run] would train refine on {top_ctf_n} tomograms selected from {star_file}")
+        elif top_ctf_n:
             # refine has no --tomo_idx (unlike deconv/make_mask/predict) --
             # give it a star file containing only the selected rows instead.
             if engine in ("aretomo2", "imod_raptor"):

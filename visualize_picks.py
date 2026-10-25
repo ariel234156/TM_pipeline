@@ -10,7 +10,9 @@ rlnCenteredCoordinateX/Y/ZAngst are centered on the tomogram's own
 center and in Angstrom, so pixel = centered_angst / pixel_size + dim/2.
 The pixel size is read per particle from rlnTomoTiltSeriesPixelSize --
 despite the name, pytom fills it with the voxel size it actually matched
-at (job.voxel_size), i.e. the tomogram's own spacing.
+at (job.voxel_size), i.e. the tomogram's own spacing. Without
+relion5-compat, pytom writes plain pixel coordinates (rlnCoordinateX/Y/Z,
+rlnMicrographName), which are used as-is.
 
 Usage:
     python3 visualize_picks.py --particles-star Template_matching/particles.star \\
@@ -47,7 +49,11 @@ def make_overview(particles_star: Path, tomogram_dir: Path, out: Path,
     import starfile
 
     df = starfile.read(particles_star)
-    tomo_names = sorted(df["rlnTomoName"].astype(str).unique())
+    # relion5-compat on: rlnTomoName + centered Angstrom coordinates;
+    # off: rlnMicrographName + plain pixel coordinates (pytom's own format)
+    centered = "rlnCenteredCoordinateXAngst" in df.columns
+    name_col = "rlnTomoName" if "rlnTomoName" in df.columns else "rlnMicrographName"
+    tomo_names = sorted(df[name_col].astype(str).unique())
 
     nrows = -(-len(tomo_names) // ncols)
     fig, axes = plt.subplots(nrows, ncols, figsize=(ncols * 4, nrows * 4))
@@ -61,11 +67,14 @@ def make_overview(particles_star: Path, tomogram_dir: Path, out: Path,
             cz = nz // 2
             img = np.array(vol[cz])
 
-        sub = df[df["rlnTomoName"].astype(str) == tomo_name]
-        pix = sub["rlnTomoTiltSeriesPixelSize"].to_numpy()
-        px = sub["rlnCenteredCoordinateXAngst"].to_numpy() / pix + nx / 2
-        py = sub["rlnCenteredCoordinateYAngst"].to_numpy() / pix + ny / 2
-        pz = sub["rlnCenteredCoordinateZAngst"].to_numpy() / pix + nz / 2
+        sub = df[df[name_col].astype(str) == tomo_name]
+        if centered:
+            pix = sub["rlnTomoTiltSeriesPixelSize"].to_numpy()
+            px = sub["rlnCenteredCoordinateXAngst"].to_numpy() / pix + nx / 2
+            py = sub["rlnCenteredCoordinateYAngst"].to_numpy() / pix + ny / 2
+            pz = sub["rlnCenteredCoordinateZAngst"].to_numpy() / pix + nz / 2
+        else:
+            px, py, pz = (sub[c].to_numpy() for c in ("rlnCoordinateX", "rlnCoordinateY", "rlnCoordinateZ"))
         near = np.abs(pz - cz) <= z_slab_px
 
         vmin, vmax = np.percentile(img, [1, 99])
