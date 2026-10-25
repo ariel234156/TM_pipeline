@@ -527,6 +527,7 @@ def main():
                      "bin_dir": im_cfg.get("bin_dir"),
                      "in_dir": im_cfg.get("in_dir"),
                      "bin_factor": im_cfg["bin_factor"],
+                     "thickness_px": im_cfg["thickness_px"],
                      "manifest_path": Path(im_cfg["out_dir"]) / "imod_align_manifest.json"},
                     aretomo_out_dir, mdoc_dir, r5_out_dir)
         elif engine == "aretomo2":

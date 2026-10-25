@@ -73,9 +73,16 @@ TOMOGRAMS_HEADER = [
 # engine: aretomo2/imod_raptor path only -- adds rlnTomoTiltSeriesName/
 # rlnTomoFrameCount (see write_tomograms_star_aretomo2's docstring for
 # why these are required by real RELION5 tomography programs like
-# relion_tomo_subtomo, confirmed against RELION5 5.0.1's own source).
+# relion_tomo_subtomo, confirmed against RELION5 5.0.1's own source) and
+# rlnTomoSizeX/Y/Z (the BIN-1, i.e. unbinned, tomogram dimensions --
+# confirmed missing 2026-10-25 after particles appeared almost entirely
+# outside the tomogram in RELION5: without this, RELION5's own
+# TomogramSet::loadTomogram falls back to w0=h0=d0=-999 and computes
+# out.centre = (-499.5, -499.5, -499.5), a nonsense tomogram center that
+# invalidates essentially every real particle position).
 TOMOGRAMS_HEADER_WITH_STACK = TOMOGRAMS_HEADER + [
     "_rlnTomoTiltSeriesName", "_rlnTomoFrameCount",
+    "_rlnTomoSizeX", "_rlnTomoSizeY", "_rlnTomoSizeZ",
 ]
 TILT_SERIES_HEADER = [
     "_rlnMicrographMovieName", "_rlnTomoTiltMovieFrameCount",
@@ -231,10 +238,25 @@ def write_tilt_series_star_from_mdoc(base: str, mdoc_path: Path, out_path: Path)
     ONLY the .mdoc's own per-image "Defocus" estimate for both
     rlnDefocusV/rlnDefocusU (no AreTomo3 CTF measurement exists for this
     path -- see module docstring). Returns {'tilt_axis_angle'} (no
-    'dfhand' -- the caller must supply a configured constant)."""
+    'dfhand' -- the caller must supply a configured constant).
+
+    GOTCHA (confirmed 2026-10-24 against RELION5 5.0.1's own source,
+    metadata_label.h: "rlnDefocusU"/"rlnDefocusV" are documented
+    "Defocus in U/V-direction (in Angstroms...)"): SerialEM's own .mdoc
+    "Defocus" field is in MICROMETERS (confirmed from real values, e.g.
+    -2.0, -2.05 -- physically sane underfocus in um, meaningless as
+    Angstroms). This was being written straight into rlnDefocusV/U with
+    no conversion -- silently inert as long as nothing consumed these
+    values numerically, but caught when wiring up pytom_match_template's
+    --relion5-tomograms-star (real CTF-weighted matching): it would have
+    applied a defocus 10000x too small, i.e. an effectively-zero-defocus
+    CTF model instead of the real ~2-5um one. Converted here (x10000)."""
     tilt_axis_angle, images = parse_mdoc(mdoc_path)
     defocus_by_angle = {
-        round(image["tilt_angle"], 1): (image.get("defocus", ""), image.get("defocus", ""))
+        round(image["tilt_angle"], 1): (
+            (image["defocus"] * 10000 if "defocus" in image else ""),
+            (image["defocus"] * 10000 if "defocus" in image else ""),
+        )
         for image in images
     }
     rows = _tilt_series_rows(images, tilt_axis_angle, defocus_by_angle)
@@ -387,6 +409,19 @@ def write_tomograms_star_aretomo2(cfg: dict, tomogram_dir: Path, mdoc_dir: Path,
                     cfg, raw_xf, original_stack, cfg["bin_factor"], fullres_path,
                     dry_run=False)
             row += [str(fullres_path.resolve()), meta["frame_count"]]
+
+            # rlnTomoSizeX/Y/Z: the BIN-1 (unbinned) tomogram dimensions
+            # -- read straight from the real original stack's own header
+            # rather than trusting a config value, since X/Y are exactly
+            # that stack's own pixel dimensions; Z is the reconstruction
+            # thickness scaled up by bin_factor (we reconstruct at
+            # thickness_px in the BINNED grid, so the equivalent bin-1
+            # thickness is thickness_px * bin_factor).
+            import mrcfile
+            with mrcfile.open(original_stack, header_only=True, permissive=True) as m:
+                size_x, size_y = int(m.header.nx), int(m.header.ny)
+            size_z = cfg["thickness_px"] * cfg["bin_factor"]
+            row += [size_x, size_y, size_z]
 
         rows.append(tuple(row))
 

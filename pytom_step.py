@@ -12,13 +12,16 @@ pinning needed, unlike isonet.py (see isonet2_steps.py's _isonet_prefix
 docstring for that story). bin_dir in the config is just the directory
 those scripts live in.
 
-GOTCHA found 2026-10-19: IsoNet2's predict step does not write the real
-tomogram pixel size into its output MRC header (observed: header says
-1.0 A/px regardless of the actual value) -- pytom_match_template.py falls
-back to reading voxel size from the MRC file if not given explicitly,
-which would silently produce a massive scale mismatch. This module always
-passes --voxel-size-angstrom explicitly from the config; never rely on
-the tomogram's own header for this.
+GOTCHA found 2026-10-19: IsoNet2's predict step does not always write the
+real tomogram pixel size into its output MRC header -- pytom_match_
+template.py falls back to reading voxel size from the MRC file if not
+given explicitly, which can silently produce a massive scale mismatch.
+This module never relies on the tomogram's own header: either
+--voxel-size-angstrom is passed explicitly from pytom.voxel_size_angstrom,
+or (preferred, see match_template_batch's docstring) --relion5-tomograms-
+star is used instead, which derives voxel size (and tilt angles, dose,
+real per-tilt CTF parameters) directly from a RELION5 tomograms.star
+rather than the tomogram file at all.
 
 create_mask's box size and radius (in pixels) are computed automatically
 from create_template's actual output box size and the configured
@@ -102,15 +105,56 @@ def match_template_batch(cfg: dict, template_file: Path, mask_file: Path,
     """Run pytom_match_template.py once per *.mrc in tomogram_dir, each
     into its own subfolder of out_dir/match (named after the tomogram's
     stem), so each tomogram's job.json stays unambiguous for the
-    extract_candidates step. Returns {tomogram_stem: destination_dir}."""
+    extract_candidates step. Returns {tomogram_stem: destination_dir}.
+
+    GOTCHA / real pytom feature (confirmed 2026-10-24 from pytom_tm's own
+    source, entry_points.py + io.py's parse_relion5_star_data):
+    pytom_match_template.py has a built-in --relion5-tomograms-star flag
+    that auto-derives voxel size, tilt angles, dose accumulation, AND
+    real per-tilt CTF parameters (defocus, voltage, Cs, amplitude
+    contrast) straight from a RELION5 tomograms.star + its tilt_series/
+    <name>.star -- "overwrite[s] all other metadata options" (its own
+    --help text). We were NOT using this: our job.json always showed
+    "ctf_data": null and "dose_accumulation": null, meaning matching ran
+    with zero CTF/dose weighting. When cfg["relion5_tomograms_star"] is
+    set, this now uses that flag instead of manually-typed --voxel-size-
+    angstrom/-a, which also eliminates the hand-maintained voxel_size_
+    angstrom config value as a source of scale-mismatch bugs entirely
+    (see pipeline_config.yaml's pytom: GOTCHA comment on exactly that
+    bug, found and fixed earlier the same way).
+
+    CATCH: parse_relion5_star_data matches the tomogram by checking
+    tomogram_filename.endswith(rlnTomoName) -- IsoNet2's own output
+    names (e.g. "_isonet2_unet-medium_Position_1_3_final.mrc") don't
+    satisfy this (they end in "_final", not the clean name). Worked
+    around by symlinking each tomogram to its clean rlnTomoName under
+    out_dir/tomograms_relion5/ (resumable -- skips existing links) and
+    matching against those instead of the raw tomogram_dir files."""
     mt_cfg = dict(cfg.get("match_template", {}))
     gpu = [str(g) for g in cfg.get("gpu", [0])]
     tilt_angles = mt_cfg.pop("tilt_angles", None)
+    relion5_star = cfg.get("relion5_tomograms_star")
     destinations = {}
 
     mrc_files = sorted(Path(tomogram_dir).glob("*.mrc"))
     if not mrc_files:
         raise RuntimeError(f"no .mrc tomograms found in {tomogram_dir}")
+
+    if relion5_star and not dry_run:
+        clean_names = _read_clean_tomo_names(Path(relion5_star))
+        symlink_dir = Path(cfg["out_dir"]) / "tomograms_relion5"
+        symlink_dir.mkdir(parents=True, exist_ok=True)
+        renamed = []
+        for tomo in mrc_files:
+            matches = [c for c in clean_names if c in tomo.stem]
+            if not matches:
+                raise RuntimeError(f"no clean rlnTomoName found inside {tomo.stem!r} "
+                                    f"(from {tomo}) -- checked against {clean_names}")
+            link = symlink_dir / f"{max(matches, key=len)}.mrc"
+            if not link.exists():
+                link.symlink_to(tomo.resolve())
+            renamed.append(link)
+        mrc_files = renamed
 
     for tomo in mrc_files:
         dest = Path(cfg["out_dir"]) / "match" / tomo.stem
@@ -122,10 +166,13 @@ def match_template_batch(cfg: dict, template_file: Path, mask_file: Path,
                "-d", str(dest),
                "-m", str(mask_file),
                "--particle-diameter", str(cfg["particle_diameter_angstrom"]),
-               "--voxel-size-angstrom", str(cfg["voxel_size_angstrom"]),
                "-g"] + gpu
-        if tilt_angles is not None:
-            cmd += ["-a"] + [str(a) for a in tilt_angles]
+        if relion5_star:
+            cmd += ["--relion5-tomograms-star", str(relion5_star)]
+        else:
+            cmd += ["--voxel-size-angstrom", str(cfg["voxel_size_angstrom"])]
+            if tilt_angles is not None:
+                cmd += ["-a"] + [str(a) for a in tilt_angles]
         cmd += _extra_args(mt_cfg)
         _run(cmd, dry_run)
 
