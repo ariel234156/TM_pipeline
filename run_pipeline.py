@@ -59,7 +59,7 @@ import relion5_star
 
 STAGES = ["aretomo", "imod_align", "imod_reconstruct", "relion5_star", "organize",
           "prepare_star", "deconv", "make_mask", "refine", "predict",
-          "tm_template", "tm_mask", "tm_match", "tm_extract", "tm_merge"]
+          "tm_template", "tm_mask", "tm_match", "tm_extract", "tm_merge", "tm_figure"]
 
 
 def log_run_params(cfg: dict, config_path: Path) -> Path:
@@ -698,6 +698,20 @@ def main():
 
     if active("tm_merge"):
         pytom_step.merge_stars(pytom_cfg, args.dry_run)
+
+    if active("tm_figure"):
+        # one PNG: every tomogram's central XY slice with its picks overlaid
+        fig_cfg = pytom_cfg.get("figure", {})
+        merged_star = Path(pytom_cfg.get("out_dir", ".")) / pytom_cfg.get(
+            "merged_star_name", "all_particles.star")
+        fig_out = Path(pytom_cfg.get("out_dir", ".")) / fig_cfg.get("out_name", "picks_overview.png")
+        if args.dry_run:
+            print(f"+ [dry-run] would write {fig_out} from {merged_star} on {tomogram_dir}")
+        else:
+            import visualize_picks
+            visualize_picks.make_overview(merged_star, tomogram_dir, fig_out,
+                                          z_slab_px=fig_cfg.get("z_slab_px", 20))
+            print(f"tm_figure: wrote {fig_out}")
 
     print("\nPipeline finished.")
 

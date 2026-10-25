@@ -443,3 +443,10 @@ isonet:
 #     # cut_off: 0.5                  # override automatic cutoff estimation
 #     # "relion5-compat": true        # write centered coordinates in Angstrom for RELION5 (real pytom flag, verified)
 #   # merged_star_name: particles.star
+#
+#   # tm_figure stage: one PNG with every tomogram's central XY slice and
+#   # its picks overlaid (solid = within z_slab_px of that slice, faint =
+#   # elsewhere in Z), written to out_dir/out_name
+#   figure:
+#     out_name: picks_overview.png
+#     z_slab_px: 20
