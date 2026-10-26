@@ -101,9 +101,49 @@ background rather than in a session that might get interrupted.
 | `relion5_star.py` | Generates a RELION5-compatible `tomograms.star` from any engine's output (optional, `relion5_star` stage) |
 | `pytom_step.py` | Template matching via PyTom's pytom-match-pick toolkit (optional, `tm_*` stages) |
 | `visualize_picks.py` | Picks-overview PNG (the `tm_figure` stage; also runnable on its own) |
+| `find_gain_defects.py` | Writes an AreTomo3 `-DefectFile` from a gain reference (needs numpy + tifffile) |
 | `pipeline_config.example.yaml` | Template config — copy to `pipeline_config.yaml` and edit |
 | `config_editor.py` | Local web form for editing the config |
 | `requirements.txt` | Python dependencies (just PyYAML) |
+
+## AreTomo3 tilt axis and camera defects (`engine: aretomo3`)
+
+Two settings decide whether AreTomo3's tomograms are aligned at all.
+
+**Tilt axis (`aretomo.tilt_axis`).** Don't copy the `.mdoc`'s
+`TiltAxisAngle`. It describes SerialEM's image orientation, while AreTomo3
+reads the raw EER frames, which on this microscope are about 90° rotated
+from it (AreTomo3's developers call this "incompatible coordinate systems",
+issue #11). With the `.mdoc` value locked (`[-92.67, -1]`) every tomogram
+was misaligned: concentric rings in XZ and no coherent specimen layer.
+
+To measure the axis for a new microscope or session, run one tilt series
+with `tilt_axis: [0, 1]`. A first value of 0 makes AreTomo3 search the full
+range; a second value ≥ 0 lets it refine and flip the axis 180° from its
+CTF handedness check. Read the ROT column of its `.aln`, then lock that
+value for the batch with `[<angle>, -1]`, so every tomogram gets the same
+axis and handedness. Locking matters because AreTomo3 2.3.1's random seed
+moves refined axes by up to ~1.5° between runs (fixed in 2.3.3, PR #73),
+and refinement started from a wrong value wandered 38–114° in testing.
+For the 2024-08-26 frames dataset the value is **179.2°**: a full search,
+three different starting values, and IMOD patch tracking agree within 0.6°.
+
+**Camera defects (`aretomo.defect_file`).** If the gain reference marks a
+dead column with huge values, AreTomo3 multiplies them in, and every tilt
+gets a bright line at a fixed detector position. AreTomo3's own hot-pixel
+detector can miss it. Make a defect file from the gain with
+`python3 find_gain_defects.py <gain> camera_defects.txt` and point
+`defect_file` at it. On the 2024-08-26 gain this masks column 1048 and
+improved the CTF fit from 11.0 to 9.4 Å.
+
+**`align_z: 0`** lets AreTomo3 use the thickness it measures for each tilt
+series, as the AreTomoLive paper recommends. Local alignment
+(`at_patch: [4, 4]`) gave no measurable gain at bin 8 here and is 2.7×
+slower, so it's left off.
+
+How these were measured (Position_1): even/odd half-tomogram FSC over the
+80–30 Å band, plus XY/XZ slices. Mdoc axis locked: 0.204; AreTomo3's own
+axis: 0.265.
 
 ## IMOD + RAPTOR fiducial-based alignment (`engine: imod_raptor`)
 

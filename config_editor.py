@@ -66,6 +66,7 @@ SECTIONS = [
         ("aretomo.tmp_dir", "Temp dir", "path"),
         ("aretomo.log_dir", "Log dir", "path"),
         ("aretomo.gain", "Gain reference file", "path"),
+        ("aretomo.defect_file", "Camera defect file (x y w h per line; make it with find_gain_defects.py)", "path"),
     ], "aretomo3"),
     ("AreTomo3 -- parameters", [
         ("aretomo.in_suffix", "Input suffix", "str"),
@@ -84,7 +85,7 @@ SECTIONS = [
         ("aretomo.mc_tol", "Motion-cor tolerance (px)", "float"),
         ("aretomo.rot_gain", "Rotate gain (0/1/2/3 = 0/90/180/270 deg)", "int"),
         ("aretomo.flip_gain", "Flip gain (0 none, 1 upside down, 2 left-right)", "int"),
-        ("aretomo.tilt_axis", "Tilt axis", "intlist"),
+        ("aretomo.tilt_axis", "Tilt axis in AreTomo3's own frame (angle 0 = full search; then 1 = refine, -1 = fixed). NOT the .mdoc TiltAxisAngle", "intlist"),
         ("aretomo.tilt_cor", "Tilt offset correction", "int"),
         ("aretomo.align_z", "Alignment Z height (specimen thickness, px; 0 = measured)", "int"),
         ("aretomo.vol_z", "Volume Z height (px; -1 = measured thickness + 300)", "int"),

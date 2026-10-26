@@ -51,6 +51,12 @@ aretomo:
   tmp_dir: /mnt/cryonas02/Users/Gabriel_Frank/Ariel_Cohen/test_ferr/aretomo3_out_bin8
   log_dir: /mnt/cryonas02/Users/Gabriel_Frank/Ariel_Cohen/test_ferr/aretomo3_out_bin8
   gain: /mnt/cryonas02/Users/Gabriel_Frank/Ariel_Cohen/test_ferr/20240826_170013_EER_GainReference.gain
+  # Camera defects masked before motion correction -- must match the gain
+  # reference above; regenerate for any other one:
+  #   python3 find_gain_defects.py <gain> <out.txt>
+  # (this gain marks a dead column, x = 1048, with values up to ~3800 that
+  # AreTomo3 multiplies in as a bright line in every tilt -- see README)
+  defect_file: /mnt/cryonas02/Users/Gabriel_Frank/Ariel_Cohen/test_ferr/camera_defects_20240826.txt
   pix_size: 1.51
   kv: 200
   cs: 2.70
@@ -67,10 +73,16 @@ aretomo:
   # mc_tol: 0.1
   # rot_gain: 0            # gain orientation: rotate 0/1/2/3 = 0/90/180/270 deg counter-clockwise
   # flip_gain: 0           # 0 none, 1 upside down, 2 left-right (after rotation)
-  # at_patch: [4, 4]       # local tilt-series alignment patches (x y); off by default -- worth testing on data without fiducials
+  # at_patch: [4, 4]       # local tilt-series alignment patches (x y); no gain in even/odd FSC at bin 8 on this dataset, 2.7x slower
+  # Tilt axis in AreTomo3's OWN frame -- NOT the .mdoc TiltAxisAngle, which
+  # is in SerialEM's image frame (~90 deg off for raw EER frames here; see
+  # README "AreTomo3 tilt axis and camera defects"). [0, 1] = full search
+  # per series (+ 180 deg handedness check from CTF). Once measured (ROT
+  # column of the .aln), lock it for the batch: [<angle>, -1]. This
+  # dataset: [179.2, -1].
   tilt_axis: [0, 1]
   tilt_cor: 1
-  align_z: 256            # Z height of specimen in pixels used during alignment. 0 = use the thickness AreTomo3 measures itself
+  align_z: 0              # Z height used during alignment; 0 = the thickness AreTomo3 measures per series (recommended -- one fixed value is unsuitable for a batch)
   vol_z: 2096             # reconstructed Z height. -1 = measured thickness + ext_z (300)
   at_bin: [8, 8]          # first value is the "primary" bin used below
   wbp: 1

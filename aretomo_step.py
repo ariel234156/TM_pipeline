@@ -30,6 +30,7 @@ FLAG_MAP = {
     "tmp_dir": "-TmpDir",
     "log_dir": "-LogDir",
     "gain": "-Gain",
+    "defect_file": "-DefectFile",
     "pix_size": "-PixSize",
     "kv": "-kV",
     "cs": "-Cs",
