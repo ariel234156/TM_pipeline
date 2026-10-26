@@ -55,15 +55,23 @@ aretomo:
   kv: 200
   cs: 2.70
   amp_contrast: 0.07      # AreTomo3 default: 0.07
-  fm_dose: 0
-  eer_sampling: 1          # for EER data, the manual recommends EerSampling 2 + McBin 2 together (super-resolution) over EerSampling 1 + McBin 1 -- restores more info at lower tilts
-  mc_bin: 1                # see eer_sampling comment -- pair with EerSampling 2 if you raise it
-  group: [1, 4]            # AreTomo3 manual's documented default: 1st=global alignment grouping, 2nd=patch alignment grouping (larger, since patches have less SNR than full frame)
-  mc_patch: [3, 3]
+  # Motion correction: see aretomo_step.py -- flags/defaults checked against
+  # AreTomo3 2.3.1's own source (its --help text is not reliable).
+  fm_dose: 0               # 0 = use each tilt's ExposureDose from the .mdoc (recommended). For EER, AreTomo3 sets tilt dose = FmDose x number of RAW EER frames, so only enter the dose per raw frame here, never per tilt
+  fm_int: 10               # raw EER frames per rendered fraction (AreTomo3 default, ~0.15 e/A2 per fraction at typical tomography dose). 0 = let AreTomo3 choose ~0.15 e/A2 per fraction from the dose
+  eer_sampling: 1          # 2 (+ mc_bin 2) renders 2x super-resolution and Fourier-bins back to the same pixel -- ~4x compute, gain only near Nyquist; not worth it for binned tomograms
+  mc_bin: 1                # pair with eer_sampling (2 only if eer_sampling is 2)
+  group: [1, 4]            # frames summed before measuring motion: 1st = whole-frame alignment, 2nd = patch alignment (unused while mc_patch is [1, 1])
+  mc_patch: [1, 1]         # whole-frame alignment only -- a tilt image (~1-3 e/A2) is too little signal for local patches; nextPYP and AreTomo3's own default do the same
+  # mc_iter: 15            # AreTomo3 2.3.1 source defaults (its --help text says 7 / 0.5 -- outdated)
+  # mc_tol: 0.1
+  # rot_gain: 0            # gain orientation: rotate 0/1/2/3 = 0/90/180/270 deg counter-clockwise
+  # flip_gain: 0           # 0 none, 1 upside down, 2 left-right (after rotation)
+  # at_patch: [4, 4]       # local tilt-series alignment patches (x y); off by default -- worth testing on data without fiducials
   tilt_axis: [0, 1]
   tilt_cor: 1
-  align_z: 256            # Z height of specimen in pixels used during alignment (patch-tracking). AreTomo3 default: 256
-  vol_z: 2096
+  align_z: 256            # Z height of specimen in pixels used during alignment. 0 = use the thickness AreTomo3 measures itself
+  vol_z: 2096             # reconstructed Z height. -1 = measured thickness + ext_z (300)
   at_bin: [8, 8]          # first value is the "primary" bin used below
   wbp: 1
   corr_ctf: 1

@@ -10,7 +10,10 @@ edit the YAML, not this file, to change alignment/reconstruction behavior.
 
 AreTomo3's flags use irregular casing (-PixSize, -kV, -McPatch, ...) so they
 can't be auto-derived from snake_case config keys -- FLAG_MAP is the
-translation table. Anything AreTomo3 supports that isn't in FLAG_MAP can
+translation table. Every flag here was checked against AreTomo3 2.3.1's own
+source (CInput.cpp / CMcInput.cpp / CAtInput.cpp) -- its --help output is
+not reliable (some flag names print blank, and several defaults differ from
+the code, e.g. -McIter 15 in the code vs 7 in the help). Anything AreTomo3 supports that isn't in FLAG_MAP can
 still be passed through the config's "extra" dict using the exact flag
 spelling, e.g.:
     extra:
@@ -32,10 +35,16 @@ FLAG_MAP = {
     "cs": "-Cs",
     "amp_contrast": "-AmpContrast",
     "fm_dose": "-FmDose",
+    "fm_int": "-FmInt",
     "eer_sampling": "-EerSampling",
     "mc_bin": "-McBin",
     "group": "-Group",
     "mc_patch": "-McPatch",
+    "mc_iter": "-McIter",
+    "mc_tol": "-McTol",
+    "rot_gain": "-RotGain",
+    "flip_gain": "-FlipGain",
+    "at_patch": "-AtPatch",
     "tilt_axis": "-TiltAxis",
     "tilt_cor": "-TiltCor",
     "align_z": "-AlignZ",
