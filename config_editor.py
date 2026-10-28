@@ -41,6 +41,7 @@ import argparse
 import errno
 import hashlib
 import html
+import json
 import re
 import yaml
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -406,6 +407,27 @@ def all_fields():
     for _, fields, _ in SECTIONS:
         for field in fields:
             yield field[0], field[1], field[2]
+
+
+def set_values(config_path: Path, updates: dict) -> list:
+    """Set dotted-path keys to new values on their existing lines, keeping
+    every comment (used by install.sh to record software paths). Values
+    are written as JSON text, which is valid YAML flow style: "a/b",
+    ["x", "y"]. Returns the keys with no active line in the file, which
+    are left alone -- like the form, this never adds or uncomments lines."""
+    lines = config_path.read_text().split("\n")
+    index = index_paths(lines)
+    missing = []
+    for path, value in updates.items():
+        if path not in index:
+            missing.append(path)
+            continue
+        m = VALUE_RE.match(lines[index[path]])
+        if not m:
+            raise ValueError(f"couldn't parse existing line for {path}: {lines[index[path]]!r}")
+        lines[index[path]] = m.group("prefix") + json.dumps(value) + m.group("suffix")
+    config_path.write_text("\n".join(lines))
+    return missing
 
 
 class StaleFormError(ValueError):

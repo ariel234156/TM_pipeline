@@ -28,30 +28,67 @@ Three alignment engines are supported via the `engine` config key:
   directory of pre-assembled `.st`/`.mrc` stacks, via `imod.input_mode`.
   Like `aretomo2`, no even/odd split → IsoNet2's single-tomogram method.
 
-## Prerequisites
-
-- **AreTomo3** / **AreTomo2** / **IMOD (with RAPTOR)**, whichever engine(s)
-  you use, and **IsoNet2**, installed separately on the machine you run
-  this on — none of these are pip packages. `isonet.py` (IsoNet2's CLI)
-  needs to be reachable, whether that's a bare command on `PATH` or a full
-  path set in the config's `isonet_bin` key. Same for `aretomo_bin` /
-  `aretomo2_bin` / `imod.bin_dir`.
-- Python 3 with PyYAML: `pip install -r requirements.txt`.
-
-## Quick start
+## Installation
 
 ```bash
 git clone /mnt/cryonas02/Users/Gabriel_Frank/Ariel_Cohen/aretomo3-isonet2-pipeline.git
 cd aretomo3-isonet2-pipeline
-pip install -r requirements.txt
-cp pipeline_config.example.yaml pipeline_config.yaml
+./install.sh --check     # report what's there and what's missing; changes nothing
+./install.sh             # install what's missing into ~/cryoet_software
 ```
+
+`install.sh` checks each piece of software the pipeline runs and installs
+only what's missing, all into one folder (`--prefix`, default
+`~/cryoet_software`), without root. A copy counts as present if it is
+already set in your config, on `PATH`, or in the prefix, and it actually
+runs. Re-running is safe.
+
+| Component | Installed as | Version installed |
+|---|---|---|
+| Python for the pipeline (PyYAML, numpy, mrcfile, starfile, matplotlib, tifffile) | conda environment | Python 3.11 |
+| IMOD, including RAPTOR (older than 5.1.13 counts as missing) | IMOD's own installer, from bio3d.colorado.edu | 5.1.13 |
+| IsoNet2 | GitHub, plus its own `isonet2_environment.yml` | commit `6c5c7bb` |
+| PyTom (`pytom-match-pick`) | conda environment (cupy) + pip | 0.9.0 |
+| AreTomo3 | built from GitHub | 2.3.1 (`8a068cf`) |
+| AreTomo2 | built from GitHub | v1.1.2 |
+
+These are the versions the pipeline was tested with; flags such as
+`--aretomo3-ref` or `--pytom-version` choose others (`./install.sh --help`).
+Installing everything took about 20 minutes and 18 GB here, most of it for
+IsoNet2's PyTorch/CUDA environment. Its checks and installs ignore Python
+packages installed with `pip install --user` (`~/.local`), which can
+otherwise break conda environments.
+
+Afterwards it writes the paths into `pipeline_config.yaml`, keeping all
+comments, and creates that file from `pipeline_config.example.yaml` if it
+doesn't exist yet. The example has its `imod:` and `pytom:` sections
+commented out; for those, it prints the lines to add instead. It also writes
+two launchers that always use the right Python:
+
+```bash
+~/cryoet_software/bin/cryoet-pipeline --config pipeline_config.yaml
+~/cryoet_software/bin/cryoet-config-editor --config pipeline_config.yaml
+```
+
+Useful options: `--only imod,pytom` or `--skip aretomo2` to limit the
+components, `--config my_config.yaml`, `--cuda /usr/local/cuda-12.4` to
+choose the CUDA toolkit for the AreTomo builds, and `--ignore-existing all`
+for a fully self-contained install that ignores copies found elsewhere.
+Logs go to `~/cryoet_software/logs/`.
+
+**What it can't install** (ask an administrator): the NVIDIA driver; `git`,
+`make`, and `curl` or `wget`; and, only for building AreTomo3/AreTomo2, a
+CUDA toolkit and the system C++ compiler (`/usr/bin/g++`). If there is no
+conda, it installs Miniforge into the prefix first. RELION isn't needed:
+the pipeline writes RELION5 star files itself.
+
+## Quick start
 
 Edit `pipeline_config.yaml` for your dataset (paths, pixel size, GPU IDs,
 etc.) — either by hand, or with the included web form:
 
 ```bash
-python3 config_editor.py
+~/cryoet_software/bin/cryoet-config-editor     # or: python3 config_editor.py
 # prints e.g. "Open http://localhost:8766" -- open that address
 ```
 
@@ -111,7 +148,8 @@ background rather than in a session that might get interrupted.
 | `find_gain_defects.py` | Writes an AreTomo3 `-DefectFile` from a gain reference (needs numpy + tifffile) |
 | `pipeline_config.example.yaml` | Template config — copy to `pipeline_config.yaml` and edit |
 | `config_editor.py` | Local web form for editing the config |
-| `requirements.txt` | Python dependencies (just PyYAML) |
+| `install.sh` | Checks for, and installs if missing, all the software above (see Installation) |
+| `requirements.txt` | The pipeline's own Python dependencies (`install.sh` installs them too) |
 
 ## AreTomo3 tilt axis and camera defects (`engine: aretomo3`)
 

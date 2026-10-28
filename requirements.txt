@@ -1,1 +1,6 @@
 PyYAML
+numpy
+mrcfile
+starfile
+matplotlib
+tifffile
