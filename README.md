@@ -52,8 +52,15 @@ etc.) — either by hand, or with the included web form:
 
 ```bash
 python3 config_editor.py
-# open http://localhost:8765
+# prints e.g. "Open http://localhost:8766" -- open that address
 ```
+
+Several people can run the editor at once on the same machine: each one
+takes the first free port in 8765–8770 (`--port 8767` or `--port 9000-9005`
+to choose). Each person can also point it at their own config with
+`--config my_config.yaml`. If two people have the same file open, a save
+from a page that's out of date is refused instead of silently undoing the
+other person's changes; reload and save again.
 
 `config_editor.py` is a small local web server (stdlib + PyYAML only, no
 extra dependencies) covering every active parameter and raw path in the

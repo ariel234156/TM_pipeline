@@ -5,12 +5,19 @@ parameters and raw data paths, without hand-editing YAML.
 
 Usage:
     python3 config_editor.py
-    python3 config_editor.py --config pipeline_config.yaml --port 8765
+    python3 config_editor.py --config my_config.yaml --port 8767
 
-Then open http://localhost:8765 in a browser. Over SSH/VSCode Remote, the
-port is auto-forwarded -- no extra setup needed. The server binds to
-127.0.0.1 only (not reachable from the network) since it can rewrite the
-config file.
+Several people can run it at the same time on one machine: by default it
+takes the first free port in 8765-8770 and prints which one it got -- open
+http://localhost:<that port> in a browser. --port takes one port (8767) or
+a range (8765-8770). Over SSH/VSCode Remote, the port is auto-forwarded --
+no extra setup needed. The server binds to 127.0.0.1 only (not reachable
+from the network) since it can rewrite the config file.
+
+If two people have the same config file open, a save is refused when the
+file changed after that page was loaded (saved from another editor, or
+edited by hand) -- every save writes all fields, so it would otherwise
+silently revert the other person's edits. Reload the page and redo yours.
 
 This edits pipeline_config.yaml IN PLACE by patching only the matched
 value text of each field's own line -- it never re-serializes the whole
@@ -31,6 +38,8 @@ This does NOT run the pipeline -- it only edits the config. Run
 run_pipeline.py yourself afterward, as before.
 """
 import argparse
+import errno
+import hashlib
 import html
 import re
 import yaml
@@ -300,7 +309,13 @@ def display_value(kind: str, value) -> str:
     return str(value)
 
 
-def render_form(cfg: dict, active: set, message: str = "", error: str = "") -> str:
+def file_signature(text: str) -> str:
+    """Identifies the exact file contents a form was rendered from."""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def render_form(cfg: dict, active: set, message: str = "", error: str = "",
+                file_sig: str = "") -> str:
     parts = ["""<!doctype html><html><head><meta charset="utf-8">
 <title>Pipeline config editor</title>
 <style>
@@ -327,6 +342,7 @@ section[hidden]{display:none}
     if error:
         parts.append(f'<div class="msg err">{html.escape(error)}</div>')
     parts.append('<form method="post" action="/save">')
+    parts.append(f'<input type="hidden" name="_file_sig" value="{file_sig}">')
     for section_title, fields, engine_filter in SECTIONS:
         attr = f' data-engine="{html.escape(engine_filter)}"' if engine_filter else ""
         parts.append(f"<section{attr}><h2>{html.escape(section_title)}</h2>")
@@ -392,8 +408,19 @@ def all_fields():
             yield field[0], field[1], field[2]
 
 
+class StaleFormError(ValueError):
+    pass
+
+
 def apply_updates(config_path: Path, form: dict) -> None:
     text = config_path.read_text()
+    # Checked against the same read that gets patched and written below.
+    if form.get("_file_sig", [""])[0] != file_signature(text):
+        raise StaleFormError(
+            f"{config_path.name} changed after you opened this page (saved from "
+            f"another editor, or edited by hand). Saving would undo those "
+            f"changes, so nothing was written. The form below now shows the "
+            f"current file -- redo your edits and save again.")
     lines = text.split("\n")
     index = index_paths(lines)
 
@@ -452,18 +479,34 @@ class Handler(BaseHTTPRequestHandler):
         try:
             apply_updates(self.config_path, form)
             self._send_html(self._form(message=f"Saved to {self.config_path}"))
+        except StaleFormError as exc:
+            self._send_html(self._form(error=f"Not saved -- {exc}"), status=409)
         except Exception as exc:
             self._send_html(self._form(error=f"Not saved -- {exc}"), status=400)
 
     def _form(self, **kw) -> str:
         text = self.config_path.read_text()
-        return render_form(yaml.safe_load(text), set(index_paths(text.split("\n"))), **kw)
+        return render_form(yaml.safe_load(text), set(index_paths(text.split("\n"))),
+                           file_sig=file_signature(text), **kw)
+
+
+def parse_ports(spec: str) -> list:
+    """'8767' -> [8767]; '8765-8770' -> [8765, 8766, ..., 8770]."""
+    lo, _, hi = spec.partition("-")
+    try:
+        ports = list(range(int(lo), int(hi or lo) + 1))
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not a port or port range: {spec!r}")
+    if not ports:
+        raise argparse.ArgumentTypeError(f"empty port range: {spec!r}")
+    return ports
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--config", type=Path, default=Path("pipeline_config.yaml"))
-    ap.add_argument("--port", type=int, default=8765)
+    ap.add_argument("--port", type=parse_ports, default="8765-8770",
+                    help="port or range; the first free one is used (default: 8765-8770)")
     ap.add_argument("--host", default="127.0.0.1", help="bind address (default: localhost only)")
     args = ap.parse_args()
 
@@ -471,9 +514,20 @@ def main():
         raise SystemExit(f"{args.config} not found -- copy pipeline_config.example.yaml first")
 
     Handler.config_path = args.config
-    server = ThreadingHTTPServer((args.host, args.port), Handler)
+    server = None
+    for port in args.port:
+        try:
+            server = ThreadingHTTPServer((args.host, port), Handler)
+            break
+        except OSError as exc:
+            if exc.errno != errno.EADDRINUSE:
+                raise
+    if server is None:
+        raise SystemExit(f"ports {args.port[0]}-{args.port[-1]} are all in use (another "
+                         f"editor per port) -- stop one, or pass --port with a free one")
+    port = server.server_address[1]
     print(f"Editing {args.config}")
-    print(f"Open http://localhost:{args.port} in your browser (Ctrl+C to stop)")
+    print(f"Open http://localhost:{port} in your browser (Ctrl+C to stop)")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
