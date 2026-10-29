@@ -685,6 +685,14 @@ def main():
                 print(f"refine: top_ctf_n={top_ctf_n} -> training on rlnIndex {sorted(keep)} "
                       f"({star_file})")
             refine_star_file = write_filtered_star(star_file, keep, suffix="_top_ctf")
+            # refine's per-save_interval preview predict defaults to
+            # prev_tomo_idx=1 and then reads all_tomo_paths[0]. The filtered
+            # star keeps the original rlnIndex values, so if 1 isn't among
+            # them the preview predicts nothing and refine dies with an
+            # IndexError right after the first save_interval epochs (seen
+            # 2026-10-28: stopped at epoch 10 of 50). Point it at a row
+            # that is actually in the filtered star.
+            rf_cfg.setdefault("prev_tomo_idx", min(keep))
         refine_out_dir = isonet2_steps.refine(
             refine_star_file, isonet_bin=isonet_bin, dry_run=args.dry_run, **rf_cfg)
 
