@@ -141,7 +141,7 @@ background rather than in a session that might get interrupted.
 | `aretomo2_step.py` | Batch-runs AreTomo2 over pre-assembled tilt series MRC stacks (`engine: aretomo2`) |
 | `imod_step.py` | Fiducial-based alignment/reconstruction via IMOD + RAPTOR (`engine: imod_raptor`) |
 | `isonet2_steps.py` | Thin wrappers around `isonet.py`'s subcommands |
-| `organize_for_isonet2.py` | Organizes AreTomo3's EVN/ODD volumes into IsoNet2's expected layout |
+| `organize_for_isonet2.py` | Organizes AreTomo3's EVN/ODD volumes into IsoNet2's expected layout (rotated to Z along the beam) and reads each tomogram's tilt range from its `.aln` |
 | `relion5_star.py` | Generates a RELION5-compatible `tomograms.star` from any engine's output (optional, `relion5_star` stage) |
 | `pytom_step.py` | Template matching via PyTom's pytom-match-pick toolkit (optional, `tm_*` stages) |
 | `visualize_picks.py` | Picks-overview PNG (the `tm_figure` stage; also runnable on its own) |
@@ -284,6 +284,19 @@ real `relion_tomo_subtomo` run (all picked particles extracted); the
   `imod_raptor` (full tomograms, no even/odd split). Using `isonet2-n2n`
   against a full-tomogram star file crashes trying to open `None` as a file (the
   half-tomogram columns aren't populated).
+- **How IsoNet2 gets AreTomo3's volumes and tilt range.** AreTomo3 writes
+  volumes with the slab thickness along Y (its default `-FlipVol 0`), but
+  IsoNet2 assumes Z is the beam direction: its missing-wedge mask,
+  `make_mask`'s `z_crop` and `predict`'s normalization all do. So
+  `organize` writes the EVN/ODD halves rotated exactly as IMOD's
+  `clip rotx` would (real files, not symlinks: ~0.5 GB per tomogram at
+  bin 8), and the AreTomo3 output is never changed. `prepare_star` then
+  sets each tomogram's `rlnTiltMin`/`rlnTiltMax` from its `.aln` (the
+  angles AreTomo3 reconstructed with, including its measured tilt offset),
+  not one shared `-60`/`60`. Checked on 2026-10-29 data: IsoNet2's mask
+  matched the measured Fourier wedge with r ≈ 0.59 before, 0.82–0.93 after.
+  IsoNet2's output, which template matching reads, is in the same Z-along-
+  the-beam layout.
 - **`isonet.refine.top_ctf_n`** (optional): caps training to only N
   tomograms instead of every one in the star file. For `engine: aretomo3`
   this picks the N tilt series with the highest CTF cross-correlation

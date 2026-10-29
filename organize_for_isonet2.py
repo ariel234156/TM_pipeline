@@ -5,6 +5,12 @@ and print the isonet.py prepare_star command to run next.
 
 Run this on the same machine/filesystem as the AreTomo3 output (symlinks
 are used by default, so it must be a local/POSIX filesystem, not SMB/CIFS).
+Volumes in AreTomo3's default layout (thickness along Y) are written as
+rotated copies instead -- IsoNet2 needs Z along the beam (see
+volume_needs_rotx). Each tomogram's tilt range from its .aln is printed
+in the log; prepare_star takes only one --tilt_min/--tilt_max, so set
+rlnTiltMin/rlnTiltMax per row in the star file afterwards (run_pipeline.py
+does this automatically).
 
 Example (matching aretomo.sh in this conversation):
 
@@ -25,6 +31,9 @@ import os
 import shutil
 import sys
 from pathlib import Path
+
+import mrcfile
+import numpy as np
 
 EVN_SUFFIX = "_EVN_Vol.mrc"
 ODD_SUFFIX = "_ODD_Vol.mrc"
@@ -173,6 +182,80 @@ def link_or_copy(src: Path, dst: Path, copy: bool):
         os.symlink(src.resolve(), dst)
 
 
+def parse_aln_tilt_range(aln_path: Path, log, base):
+    """(min, max) of the tilt angles AreTomo3 actually reconstructed with:
+    the TILT column (10th) of the .aln's per-view rows. Those angles
+    already include the AlphaOffset AreTomo3 measured (-TiltCor 1; up to
+    ~25 deg on this data) and leave out the views it dropped as dark, so
+    they -- not the .mdoc's nominal -60/+60 -- are where each volume's
+    missing wedge really is. IsoNet2's own prepare_star help asks for
+    exactly this ("final tilt angle used for tomogram reconstruction from
+    your .tlt or .aln file"). Returns None if the .aln is missing/empty."""
+    if not aln_path.exists():
+        log.append((base, "WARN", f"{aln_path.name} not found -- tilt range left at the config value"))
+        return None
+    tilts = []
+    for line in aln_path.read_text().splitlines():
+        if line.startswith("# Local Alignment"):
+            break  # per-patch rows follow; the global table is complete
+        fields = line.split()
+        if line.startswith("#") or len(fields) < 10:
+            continue
+        tilts.append(float(fields[9]))
+    if not tilts:
+        log.append((base, "WARN", f"no view rows in {aln_path.name} -- tilt range left at the config value"))
+        return None
+    return min(tilts), max(tilts)
+
+
+def volume_needs_rotx(path: Path) -> bool:
+    """True if the volume is stored the way AreTomo3 writes it by default
+    (-FlipVol 0): slab thickness along the file's Y axis, tilt axis along
+    Z. IsoNet2 needs Z along the beam -- its missing-wedge mask
+    (missing_wedge.mw3D), make_mask's z_crop and predict's normalization
+    all assume it -- so such a volume has to be rotated before IsoNet2
+    sees it."""
+    with mrcfile.open(path, header_only=True, permissive=True) as m:
+        nx, ny, nz = int(m.header.nx), int(m.header.ny), int(m.header.nz)
+    return ny < nx and ny < nz
+
+
+def write_rotx(src: Path, dst: Path):
+    """Write src rotated about X into dst, voxel-for-voxel what IMOD's
+    `clip rotx` (= `trimvol -rx`) writes (checked against IMOD 5.1.13), so
+    handedness is kept and the .aln tilt angles keep their sign. dst is
+    replaced via a temp file + os.replace and never written through: an
+    earlier run may have left a symlink there that points at AreTomo3's
+    own output."""
+    with mrcfile.open(src, permissive=True) as m:
+        data = np.ascontiguousarray(np.rot90(m.data, 1, axes=(0, 1)))
+        vs = m.voxel_size
+        voxel = (float(vs.x), float(vs.z), float(vs.y))
+    tmp = dst.with_name(dst.name + ".part")
+    if tmp.exists() or tmp.is_symlink():
+        tmp.unlink()
+    with mrcfile.new(tmp) as out:
+        out.set_data(data)
+        out.voxel_size = voxel
+    os.replace(tmp, dst)
+
+
+def place_volume(src: Path, dst: Path, copy: bool) -> str:
+    """Put src where IsoNet2 reads it: rotated to Z-along-the-beam if it is
+    in AreTomo3's default layout (a real file, since the data change),
+    otherwise symlinked/copied as before. A rotated copy newer than src is
+    reused, so re-running organize doesn't rewrite every volume."""
+    if not volume_needs_rotx(src):
+        link_or_copy(src, dst, copy)
+        return "copied" if copy else "linked"
+    if (dst.is_file() and not dst.is_symlink()
+            and dst.stat().st_mtime >= src.stat().st_mtime
+            and not volume_needs_rotx(dst)):
+        return "rotated (reused)"
+    write_rotx(src, dst)
+    return "rotated"
+
+
 def main():
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -228,13 +311,16 @@ def main():
             tlt_path = args.in_dir / f"{base}_TLT.txt"
             defocus = parse_ctf_defocus_near_zero(ctf_path, tlt_path, log, base)
 
+        tilt_range = parse_aln_tilt_range(args.in_dir / f"{base}.aln", log, base)
+
         evn_dst = evn_dir / f"{base}_EVN.mrc"
         odd_dst = odd_dir / f"{base}_ODD.mrc"
-        link_or_copy(evn, evn_dst, args.copy)
-        link_or_copy(odd, odd_dst, args.copy)
+        how = place_volume(evn, evn_dst, args.copy)
+        place_volume(odd, odd_dst, args.copy)
 
         included.append((base, evn_dst, odd_dst, defocus))
-        log.append((base, "OK", "linked" if not args.copy else "copied"))
+        log.append((base, "OK", how if tilt_range is None
+                    else f"{how}; tilt range {tilt_range[0]:.2f} {tilt_range[1]:.2f}"))
 
     manifest_path = args.out_dir / "isonet2_prep_manifest.csv"
     with open(manifest_path, "w", newline="") as fh:

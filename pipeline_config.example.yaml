@@ -285,6 +285,12 @@ isonet:
     star_name: tomograms.star
     voltage: 300
     ac: 0.1
+    # tilt_min/tilt_max: with engine: aretomo3 these are only a fallback.
+    # Each tomogram's star row gets the range AreTomo3 actually
+    # reconstructed with (the .aln TILT column, which includes the tilt
+    # offset AreTomo3 measured -- up to +-25 deg on the 2026-09-08 data);
+    # see run_pipeline.py's apply_aln_tilt_ranges. A shared -60/+60 put
+    # IsoNet2's missing wedge in the wrong place.
     tilt_min: -60
     tilt_max: 60
     # number_subtomos: 3000          # default: auto (3000 total / n tomograms)

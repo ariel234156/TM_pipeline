@@ -121,11 +121,14 @@ def run_organize(cfg: dict, aretomo_out_dir: Path, dry_run: bool):
         # isonet.refine.top_ctf_n (see main()) ranks tomograms by.
         ctf_score = prep.parse_ctf_score_near_zero(
             in_dir / f"{base}_CTF.txt", in_dir / f"{base}_TLT.txt", log, base)
+        tilt_range = prep.parse_aln_tilt_range(in_dir / f"{base}.aln", log, base)
         evn_dst = evn_dir / f"{base}_EVN.mrc"
         odd_dst = odd_dir / f"{base}_ODD.mrc"
-        prep.link_or_copy(evn, evn_dst, copy)
-        prep.link_or_copy(odd, odd_dst, copy)
-        included.append((base, defocus, ctf_score))
+        how = prep.place_volume(evn, evn_dst, copy)
+        prep.place_volume(odd, odd_dst, copy)
+        if how.startswith("rotated"):
+            log.append((base, "OK", f"EVN/ODD {how} to Z-along-the-beam for IsoNet2"))
+        included.append((base, defocus, ctf_score, tilt_range))
 
     for base, status, detail in log:
         print(f"  [{status}] {base}: {detail}")
@@ -133,8 +136,8 @@ def run_organize(cfg: dict, aretomo_out_dir: Path, dry_run: bool):
         raise RuntimeError(
             "organize step found nothing to hand to isonet2 -- check the AreTomo3 output dir")
 
-    defocus_list = [d if d is not None else 0 for _, d, _ in included]
-    if any(d is None for _, d, _ in included):
+    defocus_list = [d if d is not None else 0 for _, d, _, _ in included]
+    if any(d is None for _, d, _, _ in included):
         print("WARNING: some tilt series had no usable defocus, filled with 0 -- "
               "see [WARN]/[SKIP] lines above", file=sys.stderr)
 
@@ -145,14 +148,24 @@ def run_organize(cfg: dict, aretomo_out_dir: Path, dry_run: bool):
     with open(scores_path, "w", newline="") as fh:
         writer = csv.writer(fh)
         writer.writerow(["index", "basename", "ctf_score"])
-        for i, (base, _defocus, score) in enumerate(included, start=1):
+        for i, (base, _defocus, score, _tilt) in enumerate(included, start=1):
             writer.writerow([i, base, "" if score is None else score])
-    if any(s is None for _, _, s in included):
+    if any(s is None for _, _, s, _ in included):
         print("WARNING: some tilt series had no usable CTF score (see [WARN]/[SKIP] lines "
               "above) -- they're excluded from isonet.refine.top_ctf_n ranking", file=sys.stderr)
 
+    # Same reason as ctf_scores.csv: prepare_star reads it back (see
+    # apply_aln_tilt_ranges) to give each tomogram its real missing wedge.
+    ranges_path = out_dir / "tilt_ranges.csv"
+    with open(ranges_path, "w", newline="") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(["basename", "tilt_min", "tilt_max"])
+        for base, _defocus, _score, tilt in included:
+            writer.writerow([base, *(("", "") if tilt is None else tilt)])
+
     print(f"organize: {len(included)} tilt series -> {evn_dir}, {odd_dir}")
     print(f"organize: CTF scores written to {scores_path} (for isonet.refine.top_ctf_n)")
+    print(f"organize: per-tomogram tilt ranges from the .aln files written to {ranges_path}")
     return evn_dir, odd_dir, pixel_size, defocus_list
 
 
@@ -475,6 +488,47 @@ def write_filtered_star(star_file: Path, keep_indices: set, suffix: str) -> Path
     return out_path
 
 
+def apply_aln_tilt_ranges(star_file: Path, organize_out_dir) -> None:
+    """isonet.py prepare_star takes one --tilt_min/--tilt_max for every
+    tomogram, but AreTomo3 reconstructs each one with its own measured
+    tilt offset (-TiltCor; -18.6 to +24.8 deg on the 2026-09-08 data), so
+    one shared -60/+60 puts IsoNet2's missing wedge in the wrong place for
+    most of them. Overwrites rlnTiltMin/rlnTiltMax per row with the range
+    organize read from each tomogram's .aln (tilt_ranges.csv), matched by
+    the half-tomogram file name. Edits the data rows in place, like
+    write_filtered_star, so the rest of the file stays as isonet.py wrote it."""
+    ranges_path = Path(organize_out_dir) / "tilt_ranges.csv"
+    if not ranges_path.exists():
+        print(f"WARNING: {ranges_path} not found -- rlnTiltMin/Max stay at the config "
+              f"value for every tomogram; re-run with --start-from organize", file=sys.stderr)
+        return
+    with open(ranges_path, newline="") as fh:
+        ranges = {r["basename"]: (r["tilt_min"], r["tilt_max"])
+                  for r in csv.DictReader(fh) if r["tilt_min"]}
+
+    lines = Path(star_file).read_text().splitlines()
+    columns = {}
+    for line in lines:
+        if line.startswith("_rln"):
+            name, number = line.split()[:2]
+            columns[name] = int(number.lstrip("#")) - 1
+    c_half1, c_min, c_max = (columns["_rlnTomoReconstructedTomogramHalf1"],
+                             columns["_rlnTiltMin"], columns["_rlnTiltMax"])
+    for n, line in enumerate(lines):
+        fields = line.split()
+        if len(fields) != len(columns) or line.startswith(("_", "#")):
+            continue
+        base = Path(fields[c_half1]).name.removesuffix("_EVN.mrc")
+        if base not in ranges:
+            print(f"WARNING: no .aln tilt range for {base} -- keeps rlnTiltMin/Max "
+                  f"{fields[c_min]}/{fields[c_max]} from the config", file=sys.stderr)
+            continue
+        fields[c_min], fields[c_max] = ranges[base]
+        lines[n] = "\t".join(fields)
+        print(f"prepare_star: {base} tilt range {ranges[base][0]} {ranges[base][1]} (from .aln)")
+    Path(star_file).write_text("\n".join(lines) + "\n")
+
+
 def main():
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -650,6 +704,8 @@ def main():
                 pixel_size, "[" + ",".join(str(d) for d in defocus_list) + "]",
                 even_dir=evn_dir, odd_dir=odd_dir,
                 isonet_bin=isonet_bin, dry_run=args.dry_run, **ps_cfg)
+            if not args.dry_run:
+                apply_aln_tilt_ranges(star_file, organize_cfg.get("out_dir", "."))
 
     if active("deconv"):
         dc_cfg = dict(isonet_cfg.get("deconv", {}))
