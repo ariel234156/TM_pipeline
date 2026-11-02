@@ -338,17 +338,11 @@ isonet:
     # The mask only decides where refine centres its training cubes;
     # predict corrects the whole tomogram whatever the mask. make_mask masks
     # only the tomograms refine trains on (train_tomos / top_ctf_n below).
-    # mode (run_pipeline.py-only key, not an isonet.py flag):
-    #   particles  - IsoNet2's default (density 50, std 50, patch 4):
-    #                dense, textured spots; leaves gaps inside large
-    #                aggregates
-    #   aggregates - density 70, std 70, patch 8: each aggregate/bundle
-    #                region as one smooth area, empty ice still out
-    #   none       - no mask: training cubes anywhere in the tomogram,
-    #                empty ice included
-    # density_percentage / std_percentage / patch_size set here override
-    # the mode's values. 100/100 drops both filters but keeps z_crop.
-    mode: particles
+    # 50/50/4 is IsoNet2's default; 70/70/8 makes each aggregate or fibre
+    # bundle one smooth region; 100/100 drops both filters (z_crop stays).
+    density_percentage: 50
+    std_percentage: 50
+    patch_size: 4
     z_crop: 0.2
     output_dir: mask
 
