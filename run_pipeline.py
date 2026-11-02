@@ -463,6 +463,127 @@ def select_first_n_indices(star_file: Path, n: int) -> set:
     return set(indices[:n])
 
 
+def _star_table(lines: list) -> tuple:
+    """Column positions (0-based, by _rln name) and data-row line numbers of
+    a single-table star file as isonet.py writes it -- a data row has one
+    field per _rln column."""
+    columns = {}
+    for line in lines:
+        if line.startswith("_rln"):
+            name, number = line.split()[:2]
+            columns[name] = int(number.lstrip("#")) - 1
+    rows = [n for n, line in enumerate(lines)
+            if columns and not line.startswith(("_", "#")) and len(line.split()) == len(columns)]
+    return columns, rows
+
+
+def _row_tomo(fields: list, columns: dict) -> str:
+    """A star row's tomogram file: rlnTomoName (aretomo2/imod_raptor), else
+    the even half (aretomo3 writes no full tomogram)."""
+    for column in ("_rlnTomoName", "_rlnTomoReconstructedTomogramHalf1"):
+        if column in columns and fields[columns[column]] != "None":
+            return fields[columns[column]]
+    return "None"
+
+
+def _tomo_names(path: str) -> set:
+    """The names isonet.refine.train_tomos accepts for one tomogram file:
+    its file name without .mrc, with and without the _EVN/_ODD (aretomo3
+    halves) or _final (imod_raptor) suffix -- Position_100_final.mrc ->
+    {Position_100_final, Position_100}."""
+    stem = Path(path).name.removesuffix(".mrc")
+    return {stem} | {stem.removesuffix(s) for s in ("_EVN", "_ODD", "_final") if stem.endswith(s)}
+
+
+def select_named_indices(star_file: Path, names) -> set:
+    """isonet.refine.train_tomos: the rlnIndex values of the named
+    tomograms (e.g. Position_100, or its file name), so refine trains on
+    hand-picked tomograms -- e.g. ones that show the structures it has to
+    learn -- instead of top_ctf_n's automatic choice."""
+    if isinstance(names, str):
+        names = names.replace(",", " ").split()
+    lines = Path(star_file).read_text().splitlines()
+    columns, rows = _star_table(lines)
+    index_by_name, examples = {}, []
+    for n in rows:
+        fields = lines[n].split()
+        tomo_names = _tomo_names(_row_tomo(fields, columns))
+        examples.append(min(tomo_names, key=len))
+        for name in tomo_names:
+            index_by_name[name] = int(fields[columns["_rlnIndex"]])
+    wanted = [Path(str(name)).name.removesuffix(".mrc") for name in names]
+    missing = [name for name in wanted if name not in index_by_name]
+    if missing:
+        raise RuntimeError(
+            f"isonet.refine.train_tomos: {', '.join(missing)} not found in {star_file} "
+            f"(its tomograms are named like {', '.join(examples[:3])})")
+    return {index_by_name[name] for name in wanted}
+
+
+def select_training_indices(star_file: Path, refine_cfg: dict, engine: str,
+                            organize_cfg: dict) -> tuple:
+    """The rlnIndex values refine trains on and how they were chosen:
+    isonet.refine.train_tomos (named tomograms) wins over top_ctf_n.
+    (None, None) means every row of the star file."""
+    train_tomos = refine_cfg.get("train_tomos")
+    top_ctf_n = refine_cfg.get("top_ctf_n")
+    if train_tomos:
+        why = "train_tomos" + (" (top_ctf_n ignored)" if top_ctf_n else "")
+        return select_named_indices(star_file, train_tomos), why
+    if not top_ctf_n:
+        return None, None
+    if engine in ("aretomo2", "imod_raptor"):
+        # Neither engine does AreTomo3-style CTF estimation -- no
+        # ctf_scores.csv to rank by, so just take the first N
+        # tomograms instead of the top N by CTF score.
+        return (select_first_n_indices(star_file, int(top_ctf_n)),
+                f"top_ctf_n={top_ctf_n} (engine: {engine} -- no CTF score "
+                f"available, using first {top_ctf_n} tomograms instead)")
+    return (select_top_ctf_indices(organize_cfg["out_dir"], int(top_ctf_n)),
+            f"top_ctf_n={top_ctf_n}")
+
+
+# isonet.make_mask.mode: values for whichever of these keys the config leaves
+# unset. "particles" is IsoNet2's own default. "aggregates" was picked on
+# 2026-11-02 UriTomos data (Position_101/104, fibre bundles): each bundle
+# region becomes one smooth area (41% of voxels kept instead of 26%) and the
+# empty ice stays out. "none" makes no mask at all.
+MASK_PRESETS = {
+    "particles": {"density_percentage": 50, "std_percentage": 50, "patch_size": 4},
+    "aggregates": {"density_percentage": 70, "std_percentage": 70, "patch_size": 8},
+    "none": {},
+}
+
+
+def clear_mask_names(star_file: Path) -> None:
+    """isonet.make_mask.mode none: set every row's rlnMaskName to None,
+    which isonet.py's refine reads as no mask -- it then centres training
+    cubes anywhere but the outer half cube of the tomogram."""
+    lines = Path(star_file).read_text().splitlines()
+    columns, rows = _star_table(lines)
+    if "_rlnMaskName" not in columns:
+        return
+    for n in rows:
+        fields = lines[n].split()
+        fields[columns["_rlnMaskName"]] = "None"
+        lines[n] = "\t".join(fields)
+    Path(star_file).write_text("\n".join(lines) + "\n")
+
+
+def warn_missing_masks(star_file: Path) -> None:
+    """make_mask only masks the tomograms refine trains on, so after
+    changing train_tomos/top_ctf_n without re-running make_mask some have
+    none, and isonet.py's refine silently samples those unmasked."""
+    lines = Path(star_file).read_text().splitlines()
+    columns, rows = _star_table(lines)
+    for n in rows:
+        fields = lines[n].split()
+        mask = fields[columns["_rlnMaskName"]] if "_rlnMaskName" in columns else "None"
+        if mask == "None" or not Path(mask).exists():
+            print(f"WARNING: no mask for {Path(_row_tomo(fields, columns)).name} -- refine "
+                  f"will sample it unmasked; re-run with --start-from make_mask", file=sys.stderr)
+
+
 def write_filtered_star(star_file: Path, keep_indices: set, suffix: str) -> Path:
     """isonet.py's refine has no --tomo_idx flag (unlike deconv/make_mask/
     predict) -- the only way to restrict which tomograms it trains on is to
@@ -712,34 +833,45 @@ def main():
         if dc_cfg.pop("enabled", True):
             isonet2_steps.deconv(star_file, isonet_bin=isonet_bin, dry_run=args.dry_run, **dc_cfg)
 
+    refine_selection = {k: isonet_cfg.get("refine", {}).get(k) for k in ("train_tomos", "top_ctf_n")}
+    mask_mode = isonet_cfg.get("make_mask", {}).get("mode", "particles")
+    if mask_mode not in MASK_PRESETS:
+        ap.error(f"isonet.make_mask.mode must be one of {', '.join(MASK_PRESETS)}, not {mask_mode!r}")
+
     if active("make_mask"):
         mm_cfg = dict(isonet_cfg.get("make_mask", {}))
-        isonet2_steps.make_mask(star_file, isonet_bin=isonet_bin, dry_run=args.dry_run, **mm_cfg)
+        mm_cfg.pop("mode", None)
+        if mask_mode == "none":
+            print("make_mask: mode none -- no masks, refine can centre training cubes anywhere")
+        else:
+            for key, value in MASK_PRESETS[mask_mode].items():
+                mm_cfg.setdefault(key, value)
+            if "tomo_idx" not in mm_cfg and Path(star_file).exists():
+                # Only refine reads masks (predict corrects the whole
+                # tomogram either way), so mask just the tomograms it trains
+                # on: all 140 took 37 min on 2026-11-01 for 5 used.
+                keep, why = select_training_indices(star_file, refine_selection, engine, organize_cfg)
+                if keep:
+                    mm_cfg["tomo_idx"] = ",".join(str(i) for i in sorted(keep))
+                    print(f"make_mask: mode {mask_mode}, only the {len(keep)} tomograms refine "
+                          f"trains on ({why}): rlnIndex {sorted(keep)}")
+            isonet2_steps.make_mask(star_file, isonet_bin=isonet_bin, dry_run=args.dry_run, **mm_cfg)
 
     refine_out_dir = None
     if active("refine"):
         rf_cfg = dict(isonet_cfg.get("refine", {}))
-        top_ctf_n = rf_cfg.pop("top_ctf_n", None)
+        rf_cfg.pop("top_ctf_n", None)
+        rf_cfg.pop("train_tomos", None)
         refine_star_file = star_file
-        if top_ctf_n and args.dry_run and not Path(star_file).exists():
+        if any(refine_selection.values()) and args.dry_run and not Path(star_file).exists():
             # prepare_star hasn't really run in a dry-run, so there are no
-            # rows to rank yet
-            print(f"+ [dry-run] would train refine on {top_ctf_n} tomograms selected from {star_file}")
-        elif top_ctf_n:
+            # rows to select from yet
+            print(f"+ [dry-run] would train refine on tomograms selected from {star_file}")
+        elif any(refine_selection.values()):
             # refine has no --tomo_idx (unlike deconv/make_mask/predict) --
             # give it a star file containing only the selected rows instead.
-            if engine in ("aretomo2", "imod_raptor"):
-                # Neither engine does AreTomo3-style CTF estimation -- no
-                # ctf_scores.csv to rank by, so just take the first N
-                # tomograms instead of the top N by CTF score.
-                keep = select_first_n_indices(star_file, int(top_ctf_n))
-                print(f"refine: top_ctf_n={top_ctf_n} (engine: {engine} -- no CTF score "
-                      f"available, using first {top_ctf_n} tomograms instead) -> "
-                      f"training on rlnIndex {sorted(keep)}")
-            else:
-                keep = select_top_ctf_indices(organize_cfg["out_dir"], int(top_ctf_n))
-                print(f"refine: top_ctf_n={top_ctf_n} -> training on rlnIndex {sorted(keep)} "
-                      f"({star_file})")
+            keep, why = select_training_indices(star_file, refine_selection, engine, organize_cfg)
+            print(f"refine: {why} -> training on rlnIndex {sorted(keep)} ({star_file})")
             refine_star_file = write_filtered_star(star_file, keep, suffix="_top_ctf")
             # refine's per-save_interval preview predict defaults to
             # prev_tomo_idx=1 and then reads all_tomo_paths[0]. The filtered
@@ -749,6 +881,11 @@ def main():
             # 2026-10-28: stopped at epoch 10 of 50). Point it at a row
             # that is actually in the filtered star.
             rf_cfg.setdefault("prev_tomo_idx", min(keep))
+        if not args.dry_run:
+            if mask_mode == "none":
+                clear_mask_names(refine_star_file)
+            else:
+                warn_missing_masks(refine_star_file)
         refine_out_dir = isonet2_steps.refine(
             refine_star_file, isonet_bin=isonet_bin, dry_run=args.dry_run, **rf_cfg)
 

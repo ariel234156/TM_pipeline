@@ -304,6 +304,17 @@ real `relion_tomo_subtomo` run (all picked particles extracted); the
   computes and persists the scores). For `engine: aretomo2`/`imod_raptor`
   neither does CTF estimation of its own, so it just takes the first N
   tomograms in star-file order instead — not a quality-ranked selection.
+- **`isonet.refine.train_tomos`** (optional): names the tomograms to train
+  on instead (e.g. `[Position_5, Position_13_2]`, file names without
+  `.mrc` and `_EVN`/`_final`); wins over `top_ctf_n`. Use it to train on
+  tomograms that show the structures you care about.
+- **`isonet.make_mask.mode`**: `particles` (IsoNet2's default, density/std
+  50/50, patch 4), `aggregates` (70/70, patch 8: each aggregate or fibre
+  bundle becomes one smooth region, empty ice still left out; 41% of voxels
+  kept instead of 26% on 2026-11-02 data) or `none` (no mask). The mask only
+  decides where `refine` centres its training cubes — `predict` corrects
+  the whole tomogram either way — so `make_mask` masks only the tomograms
+  `refine` trains on. Re-run from `make_mask` after changing either option.
 - **`deconv` is disabled by default.** With the default `engine: aretomo3`,
   this pipeline only ever organizes AreTomo3 output into EVN/ODD half-tomograms (no full tomogram), so
   `deconv`'s default input column stays unset and it would error. It also

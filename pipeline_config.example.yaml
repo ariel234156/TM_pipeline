@@ -321,9 +321,20 @@ isonet:
     output_dir: deconv
 
   make_mask:
-    density_percentage: 50
-    std_percentage: 50
-    patch_size: 4
+    # The mask only decides where refine centres its training cubes;
+    # predict corrects the whole tomogram whatever the mask. make_mask masks
+    # only the tomograms refine trains on (train_tomos / top_ctf_n below).
+    # mode (run_pipeline.py-only key, not an isonet.py flag):
+    #   particles  - IsoNet2's default (density 50, std 50, patch 4):
+    #                dense, textured spots; leaves gaps inside large
+    #                aggregates
+    #   aggregates - density 70, std 70, patch 8: each aggregate/bundle
+    #                region as one smooth area, empty ice still out
+    #   none       - no mask: training cubes anywhere in the tomogram,
+    #                empty ice included
+    # density_percentage / std_percentage / patch_size set here override
+    # the mode's values. 100/100 drops both filters but keeps z_crop.
+    mode: particles
     z_crop: 0.2
     output_dir: mask
 
@@ -346,6 +357,14 @@ isonet:
     # containing only the selected rows, and points refine at that instead.
     # Leave unset/0 to train on every tomogram in the star file.
     # top_ctf_n: 10
+    #
+    # train_tomos (optional, run_pipeline.py-only key): train on these
+    # tomograms instead -- e.g. ones that show the structures the model has
+    # to learn. Names as in the tomogram files, without .mrc and the
+    # _EVN/_final suffix (Position_1_EVN.mrc -> Position_1). Wins over
+    # top_ctf_n. After changing it, re-run from make_mask so the new
+    # tomograms get masks: --start-from make_mask
+    # train_tomos: [Position_1, Position_4]
     #
     # GOTCHA: IsoNet2's own training loop is `for step in range(save_interval,
     # epochs+1, save_interval)`. If epochs < save_interval that range is
