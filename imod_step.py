@@ -132,7 +132,8 @@ def align_frames_eer(cfg: dict, mdoc_path: Path, out_dir: Path, dry_run: bool) -
     the header exactly like it would for a real pre-assembled .st).
     Returns (stack_path, base_name)."""
     base = mdoc_path.stem
-    out_dir.mkdir(parents=True, exist_ok=True)
+    if not dry_run:
+        out_dir.mkdir(parents=True, exist_ok=True)
     stack_path = out_dir / f"{base}_assembled.st"
     angles_path = out_dir / f"{base}_mdoc.rawtlt"
 

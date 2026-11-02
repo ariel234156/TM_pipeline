@@ -97,7 +97,8 @@ def run_aretomo2_batch(cfg: dict, binary: str = "AreTomo2", dry_run: bool = Fals
     out_dir = Path(cfg["out_dir"])
     suffix = cfg.get("out_suffix", "_AreTomo")
     skip_existing = cfg.get("skip_existing", True)
-    out_dir.mkdir(parents=True, exist_ok=True)
+    if not dry_run:
+        out_dir.mkdir(parents=True, exist_ok=True)
 
     shared_flags = _build_shared_flags(cfg)
     mrc_files = sorted(in_dir.glob("*.mrc"))

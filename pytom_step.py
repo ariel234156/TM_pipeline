@@ -55,7 +55,8 @@ def _extra_args(flags: dict) -> list:
 
 def create_template(cfg: dict, dry_run: bool) -> Path:
     out_file = Path(cfg["out_dir"]) / "template.mrc"
-    out_file.parent.mkdir(parents=True, exist_ok=True)
+    if not dry_run:
+        out_file.parent.mkdir(parents=True, exist_ok=True)
     # pytom_create_template.py reads the input voxel size from the MRC
     # header if not given, and requires it to be <= the output voxel
     # size (it only downsamples). The reference map's header stores
@@ -137,6 +138,12 @@ def match_template_batch(cfg: dict, template_file: Path, mask_file: Path,
     destinations = {}
 
     mrc_files = sorted(Path(tomogram_dir).glob("*.mrc"))
+    # a dry run checks the voxel size and names too (they only read the
+    # star), but leaves the links and match/ folders to the real run: a
+    # leftover empty match/<name> would stop a later --start-from tm_extract
+    check_star = relion5_star and (not dry_run or Path(relion5_star).exists())
+    if check_star:
+        _check_voxel_size_against_star(cfg, Path(relion5_star))
     if not mrc_files and dry_run:
         print(f"+ [dry-run] would run pytom_match_template.py on every *.mrc in {tomogram_dir} "
               f"({'--relion5-tomograms-star ' + str(relion5_star) if relion5_star else '--voxel-size-angstrom'})")
@@ -144,11 +151,11 @@ def match_template_batch(cfg: dict, template_file: Path, mask_file: Path,
     if not mrc_files:
         raise RuntimeError(f"no .mrc tomograms found in {tomogram_dir}")
 
-    if relion5_star and not dry_run:
-        _check_voxel_size_against_star(cfg, Path(relion5_star))
+    if check_star:
         clean_names = _read_clean_tomo_names(Path(relion5_star))
         symlink_dir = Path(cfg["out_dir"]) / "tomograms_relion5"
-        symlink_dir.mkdir(parents=True, exist_ok=True)
+        if not dry_run:
+            symlink_dir.mkdir(parents=True, exist_ok=True)
         renamed = []
         for tomo in mrc_files:
             matches = [c for c in clean_names if c in tomo.stem]
@@ -156,15 +163,17 @@ def match_template_batch(cfg: dict, template_file: Path, mask_file: Path,
                 raise RuntimeError(f"no clean rlnTomoName found inside {tomo.stem!r} "
                                     f"(from {tomo}) -- checked against {clean_names}")
             link = symlink_dir / f"{max(matches, key=len)}.mrc"
-            if link.is_symlink() or link.exists():
-                link.unlink()  # never reuse a stale/broken link from an earlier run
-            link.symlink_to(tomo.resolve())
+            if not dry_run:
+                if link.is_symlink() or link.exists():
+                    link.unlink()  # never reuse a stale/broken link from an earlier run
+                link.symlink_to(tomo.resolve())
             renamed.append(link)
         mrc_files = renamed
 
     for tomo in mrc_files:
         dest = Path(cfg["out_dir"]) / "match" / tomo.stem
-        dest.mkdir(parents=True, exist_ok=True)
+        if not dry_run:
+            dest.mkdir(parents=True, exist_ok=True)
         destinations[tomo.stem] = dest
         cmd = [_script(cfg, "pytom_match_template.py"),
                "-t", str(template_file),
@@ -290,9 +299,9 @@ def merge_stars(cfg: dict, dry_run: bool) -> Path:
     # per-tomogram star files each live in their own match/<stem>/ subfolder
     # -- symlink them into one flat directory first.
     merge_input_dir = Path(cfg["out_dir"]) / "merge_input"
-    merge_input_dir.mkdir(parents=True, exist_ok=True)
     if not dry_run:
         import os
+        merge_input_dir.mkdir(parents=True, exist_ok=True)
         # pytom_merge_stars.py merges EVERY *.star in this dir, so links
         # left from an earlier run (e.g. different tomogram names) would
         # silently end up in the merged file -- clear our own links first

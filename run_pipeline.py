@@ -67,21 +67,31 @@ STAGES = ["aretomo", "imod_align", "imod_reconstruct", "relion5_star", "organize
 DENOISE_STAGES = ["prepare_star", "deconv", "make_mask", "refine", "predict"]
 
 
-def log_run_params(cfg: dict, config_path: Path) -> Path:
+def log_run_params(cfg: dict, config_path: Path, dry_run: bool = False) -> Path:
     """Write a timestamped copy of the resolved config to a .txt file in
     aretomo.log_dir (falling back to the current directory), so every run
-    leaves a record of exactly which parameters produced its output."""
+    leaves a record of exactly which parameters produced its output. Not
+    for a dry run: its log would read as a real run's."""
     log_dir = cfg.get("aretomo", {}).get("log_dir")
     target_dir = Path(log_dir) if log_dir else Path(".")
-    target_dir.mkdir(parents=True, exist_ok=True)
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     out_path = target_dir / f"pipeline_params_{timestamp}.txt"
+    if dry_run:
+        print(f"+ [dry-run] would log parameters to: {out_path}")
+        return out_path
+    target_dir.mkdir(parents=True, exist_ok=True)
     header = (f"# Pipeline run started {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
               f"# Config source: {config_path.resolve()}\n"
               f"# Command: {' '.join(sys.argv)}\n\n")
     out_path.write_text(header + config_path.read_text())
     print(f"Parameters logged to: {out_path}")
     return out_path
+
+
+def relion5_star_out_dir(cfg: dict, engine: str) -> Path:
+    """Where the relion5_star stage writes tomograms.star (+ tilt_series/)."""
+    section = {"aretomo2": "aretomo2", "imod_raptor": "imod"}.get(engine, "aretomo")
+    return Path(cfg.get("relion5_star", {}).get("out_dir", Path(cfg[section]["out_dir"]) / "relion5"))
 
 
 def run_organize(cfg: dict, aretomo_out_dir: Path, dry_run: bool, write_full: bool = False):
@@ -256,7 +266,8 @@ def run_imod_align(cfg: dict, dry_run: bool) -> Path:
     tilt series doesn't waste several minutes per tilt series redoing
     ones that already succeeded."""
     out_dir = Path(cfg["out_dir"])
-    out_dir.mkdir(parents=True, exist_ok=True)
+    if not dry_run:
+        out_dir.mkdir(parents=True, exist_ok=True)
     inputs = _find_imod_inputs(cfg)
     if not inputs:
         raise RuntimeError(
@@ -604,7 +615,8 @@ def warn_missing_masks(star_file: Path) -> None:
                   f"will sample it unmasked; re-run with --start-from make_mask", file=sys.stderr)
 
 
-def write_filtered_star(star_file: Path, keep_indices: set, suffix: str) -> Path:
+def write_filtered_star(star_file: Path, keep_indices: set, suffix: str,
+                        dry_run: bool = False) -> Path:
     """isonet.py's refine has no --tomo_idx flag (unlike deconv/make_mask/
     predict) -- the only way to restrict which tomograms it trains on is to
     give it a star file that only contains those rows. Keeps every header/
@@ -625,7 +637,10 @@ def write_filtered_star(star_file: Path, keep_indices: set, suffix: str) -> Path
             out_lines.append(line)
 
     out_path = Path(star_file).with_name(f"{Path(star_file).stem}{suffix}.star")
-    out_path.write_text("\n".join(out_lines) + "\n")
+    if dry_run:
+        print(f"+ [dry-run] would write {out_path} ({len(keep_indices)} tomograms)")
+    else:
+        out_path.write_text("\n".join(out_lines) + "\n")
     return out_path
 
 
@@ -684,15 +699,23 @@ def main():
     args = ap.parse_args()
 
     cfg = yaml.safe_load(args.config.read_text())
-    log_run_params(cfg, args.config)
     start_idx = STAGES.index(args.start_from)
     stop_idx = STAGES.index(args.stop_after)
     if start_idx > stop_idx:
         ap.error("--start-from must come before or equal to --stop-after")
+    # checked before any stage runs, not hours later when make_mask is reached
+    mask_mode = cfg.get("isonet", {}).get("make_mask", {}).get("mode", "particles")
+    if mask_mode not in MASK_PRESETS:
+        ap.error(f"isonet.make_mask.mode must be one of {', '.join(MASK_PRESETS)}, not {mask_mode!r}")
+    log_run_params(cfg, args.config, args.dry_run)
     skip_denoise = args.skip_denoise or bool(cfg.get("skip_denoise", False))
+    # template matching is optional: the example config has pytom: commented out
+    has_pytom = bool(cfg.get("pytom"))
 
     def active(stage):
         if skip_denoise and stage in DENOISE_STAGES:
+            return False
+        if not has_pytom and stage.startswith("tm_"):
             return False
         return start_idx <= STAGES.index(stage) <= stop_idx
 
@@ -721,11 +744,20 @@ def main():
     if skip_denoise:
         print(f"skip_denoise: skipping {', '.join(DENOISE_STAGES)} -- template matching "
               f"runs on organize's tomograms")
+    if not has_pytom:
+        print("no pytom: section in the config -- skipping template matching (tm_* stages)")
+    # a dry run that also runs prepare_star sees the star file from before
+    # (maybe another dataset's): the real run rewrites it first
+    star_rewritten = args.dry_run and active("prepare_star")
 
     if active("aretomo"):
         if engine == "aretomo2":
             aretomo_out_dir = aretomo2_step.run_aretomo2_batch(
                 cfg["aretomo2"], binary=aretomo2_bin, dry_run=args.dry_run)
+        elif engine == "aretomo3" and args.dry_run:
+            # run_aretomo3 would create out_dir/tmp_dir/log_dir even for a dry run
+            print("+ " + " ".join(aretomo_step.build_command(cfg["aretomo"], binary=aretomo_bin)))
+            aretomo_out_dir = Path(cfg["aretomo"]["out_dir"])
         elif engine == "aretomo3":
             aretomo_out_dir = aretomo_step.run_aretomo3(
                 cfg["aretomo"], binary=aretomo_bin, dry_run=args.dry_run)
@@ -745,7 +777,7 @@ def main():
         r5_cfg = cfg.get("relion5_star", {})
         if engine == "imod_raptor":
             im_cfg = cfg.get("imod", {})
-            r5_out_dir = Path(r5_cfg.get("out_dir", Path(im_cfg["out_dir"]) / "relion5"))
+            r5_out_dir = relion5_star_out_dir(cfg, engine)
             mdoc_dir = Path(r5_cfg.get("mdoc_dir", im_cfg.get("in_dir", im_cfg.get("mrc_dir"))))
             if args.dry_run:
                 print(f"+ [dry-run] would write {r5_out_dir}/tomograms.star "
@@ -771,7 +803,7 @@ def main():
                     aretomo_out_dir, mdoc_dir, r5_out_dir)
         elif engine == "aretomo2":
             a2_cfg = cfg.get("aretomo2", {})
-            r5_out_dir = Path(r5_cfg.get("out_dir", Path(a2_cfg["out_dir"]) / "relion5"))
+            r5_out_dir = relion5_star_out_dir(cfg, engine)
             mdoc_dir = Path(r5_cfg.get("mdoc_dir", a2_cfg["in_dir"]))
             if args.dry_run:
                 print(f"+ [dry-run] would write {r5_out_dir}/tomograms.star "
@@ -788,7 +820,7 @@ def main():
                      "defocus_handedness": r5_cfg.get("defocus_handedness", 1)},
                     aretomo_out_dir, mdoc_dir, r5_out_dir)
         else:
-            r5_out_dir = Path(r5_cfg.get("out_dir", Path(cfg["aretomo"]["out_dir"]) / "relion5"))
+            r5_out_dir = relion5_star_out_dir(cfg, engine)
             mdoc_dir = Path(r5_cfg.get("mdoc_dir", cfg["aretomo"]["in_prefix"]))
             if args.dry_run:
                 print(f"+ [dry-run] would write {r5_out_dir}/tomograms.star "
@@ -863,9 +895,20 @@ def main():
             isonet2_steps.deconv(star_file, isonet_bin=isonet_bin, dry_run=args.dry_run, **dc_cfg)
 
     refine_selection = {k: isonet_cfg.get("refine", {}).get(k) for k in ("train_tomos", "top_ctf_n")}
-    mask_mode = isonet_cfg.get("make_mask", {}).get("mode", "particles")
-    if mask_mode not in MASK_PRESETS:
-        ap.error(f"isonet.make_mask.mode must be one of {', '.join(MASK_PRESETS)}, not {mask_mode!r}")
+
+    def training_rows():
+        """select_training_indices on star_file -- with star_rewritten only a
+        preview, so a selection that doesn't fit the old star just warns
+        (None) instead of stopping the dry run."""
+        if not star_rewritten:
+            return select_training_indices(star_file, refine_selection, engine, organize_cfg)
+        try:
+            keep, why = select_training_indices(star_file, refine_selection, engine, organize_cfg)
+        except (RuntimeError, OSError) as e:
+            print(f"WARNING: [dry-run] can't preview the training tomograms from the current "
+                  f"{star_file}, which prepare_star rewrites first: {e}", file=sys.stderr)
+            return None
+        return keep, why and f"{why}; previewed on the current {star_file.name}"
 
     if active("make_mask"):
         mm_cfg = dict(isonet_cfg.get("make_mask", {}))
@@ -879,7 +922,7 @@ def main():
                 # Only refine reads masks (predict corrects the whole
                 # tomogram either way), so mask just the tomograms it trains
                 # on: all 140 took 37 min on 2026-11-01 for 5 used.
-                keep, why = select_training_indices(star_file, refine_selection, engine, organize_cfg)
+                keep, why = training_rows() or (None, None)
                 if keep:
                     mm_cfg["tomo_idx"] = ",".join(str(i) for i in sorted(keep))
                     print(f"make_mask: mode {mask_mode}, only the {len(keep)} tomograms refine "
@@ -892,16 +935,20 @@ def main():
         rf_cfg.pop("top_ctf_n", None)
         rf_cfg.pop("train_tomos", None)
         refine_star_file = star_file
-        if any(refine_selection.values()) and args.dry_run and not Path(star_file).exists():
+        selection = None
+        if any(refine_selection.values()) and (not args.dry_run or Path(star_file).exists()):
+            selection = training_rows()
+        if any(refine_selection.values()) and selection is None:
             # prepare_star hasn't really run in a dry-run, so there are no
             # rows to select from yet
             print(f"+ [dry-run] would train refine on tomograms selected from {star_file}")
-        elif any(refine_selection.values()):
+        elif selection:
             # refine has no --tomo_idx (unlike deconv/make_mask/predict) --
             # give it a star file containing only the selected rows instead.
-            keep, why = select_training_indices(star_file, refine_selection, engine, organize_cfg)
+            keep, why = selection
             print(f"refine: {why} -> training on rlnIndex {sorted(keep)} ({star_file})")
-            refine_star_file = write_filtered_star(star_file, keep, suffix="_top_ctf")
+            refine_star_file = write_filtered_star(star_file, keep, suffix="_top_ctf",
+                                                   dry_run=args.dry_run)
             # refine's per-save_interval preview predict defaults to
             # prev_tomo_idx=1 and then reads all_tomo_paths[0]. The filtered
             # star keeps the original rlnIndex values, so if 1 isn't among
@@ -956,6 +1003,13 @@ def main():
         if not args.dry_run and not any(tomogram_dir.glob("*.mrc")):
             raise RuntimeError(f"skip_denoise: no tomograms in {tomogram_dir} -- run organize "
                                f"with it on first: --start-from organize --skip-denoise")
+    pytom_star = pytom_cfg.get("relion5_tomograms_star")
+    if pytom_star and active("tm_match"):
+        r5_star = relion5_star_out_dir(cfg, engine) / "tomograms.star"
+        if Path(pytom_star).resolve() != r5_star.resolve():
+            print(f"WARNING: pytom.relion5_tomograms_star is {pytom_star}, but relion5_star writes "
+                  f"this dataset's to {r5_star} -- template matching takes voxel size, tilts and "
+                  f"CTF from the first one", file=sys.stderr)
     template_file = Path(pytom_cfg.get("out_dir", ".")) / "template.mrc"
     mask_file = Path(pytom_cfg.get("out_dir", ".")) / "mask.mrc"
     match_destinations = {}
