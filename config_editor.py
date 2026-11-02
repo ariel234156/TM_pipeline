@@ -203,7 +203,6 @@ SECTIONS = [
         ("isonet.make_mask.output_dir", "Output dir", "str"),
     ], None),
     ("IsoNet2 -- refine", [
-        ("isonet.refine.method", "Method (isonet2 | isonet2-n2n)", "str"),
         ("isonet.refine.arch", "Architecture", "str"),
         ("isonet.refine.cube_size", "Cube size (multiple of 16)", "int"),
         ("isonet.refine.epochs", "Epochs (must be >= save_interval, see comment)", "int"),

@@ -386,7 +386,8 @@ isonet:
     # checkpoint -- no error, no warning. Keep epochs >= save_interval
     # (ideally a multiple of it) or you'll get a clean "success" that did
     # nothing.
-    method: isonet2-n2n    # we have even/odd volumes -> noise2noise training
+    # method: set from engine by run_pipeline.py -- isonet2-n2n for aretomo3 (EVN/ODD
+    # halves), isonet2 for aretomo2/imod_raptor (one full tomogram each)
     arch: unet-medium      # unet-small | unet-medium | unet-large | scunet-fast
     cube_size: 96           # multiple of 16, >= 64
     epochs: 50

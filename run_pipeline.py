@@ -783,6 +783,15 @@ def main():
     # a dry run that also runs prepare_star sees the star file from before
     # (maybe another dataset's): the real run rewrites it first
     star_rewritten = args.dry_run and active("prepare_star")
+    # IsoNet2's method follows from the engine: AreTomo3 writes EVN/ODD
+    # halves (noise2noise), AreTomo2 and IMOD one full tomogram each -- any
+    # other pairing can only crash (a copied config had isonet2 for
+    # AreTomo3 data, 2026-11-02)
+    refine_method = "isonet2-n2n" if engine == "aretomo3" else "isonet2"
+    configured_method = isonet_cfg.get("refine", {}).get("method")
+    if configured_method not in (None, "auto", refine_method) and active("refine"):
+        print(f"refine: isonet.refine.method {configured_method} ignored -- engine {engine} "
+              f"means {refine_method}")
 
     if active("aretomo"):
         if engine == "aretomo2":
@@ -925,12 +934,17 @@ def main():
 
     if active("deconv"):
         dc_cfg = dict(isonet_cfg.get("deconv", {}))
-        if dc_cfg.pop("enabled", True):
+        enabled = dc_cfg.pop("enabled", True)
+        if enabled and refine_method == "isonet2-n2n":
+            # and it would crash: AreTomo3 stars have no full tomogram (rlnTomoName None)
+            print("deconv: skipped -- isonet2-n2n trains on the EVN/ODD halves and never "
+                  "reads deconvolved tomograms")
+        elif enabled:
             isonet2_steps.deconv(star_file, isonet_bin=isonet_bin, dry_run=args.dry_run, **dc_cfg)
 
     refine_selection = {k: isonet_cfg.get("refine", {}).get(k) for k in ("train_tomos", "top_ctf_n")}
-    refine_method = isonet_cfg.get("refine", {}).get("method", "auto")
-    deconv_on = isonet_cfg.get("deconv", {}).get("enabled", True)
+    deconv_on = (isonet_cfg.get("deconv", {}).get("enabled", True)
+                 and refine_method != "isonet2-n2n")
     # whether star_file already holds what refine/predict will read: in a
     # dry run, prepare_star or deconv running first would still change it
     star_settled = Path(star_file).exists() and not (
@@ -984,6 +998,7 @@ def main():
         rf_cfg = dict(isonet_cfg.get("refine", {}))
         rf_cfg.pop("top_ctf_n", None)
         rf_cfg.pop("train_tomos", None)
+        rf_cfg["method"] = refine_method
         refine_star_file = star_file
         selection = None
         if any(refine_selection.values()) and (not args.dry_run or Path(star_file).exists()):
