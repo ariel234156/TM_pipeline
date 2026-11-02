@@ -127,7 +127,13 @@ Useful flags:
   pipeline (stage names above). Handy for resuming after a crash, or for
   running the IsoNet2 side against AreTomo3 output you already have:
   `--start-from organize`.
-- `--dry-run` — print every command without executing it.
+- `--dry-run` — print every command without executing it. Writes nothing
+  (no run log, folders or star files), but makes the checks that only read:
+  the training tomograms against the current star file, and template
+  matching's voxel size and tomogram names against
+  `pytom.relion5_tomograms_star`.
+- Template matching (`tm_*`) is skipped when the config has no `pytom:`
+  section.
 - `--skip-denoise` (or `skip_denoise: true` in the config) — skip IsoNet2
   (`prepare_star` to `predict`) and run template matching straight on
   `organize`'s tomograms: IMOD/AreTomo2 tomograms as they are, AreTomo3's
