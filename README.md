@@ -338,13 +338,11 @@ real `relion_tomo_subtomo` run (all picked particles extracted); the
   like it's working (imports fine, starts training) before failing on
   something unrelated. Pin the exact interpreter instead:
   `isonet_bin: ["/path/to/your/env/bin/python", "/path/to/isonet.py"]`.
-- **IsoNet2's method is set from the engine** (`isonet.refine.method` in a
-  config is ignored, with a note): `isonet2-n2n` for `engine: aretomo3`
-  (EVN/ODD halves), `isonet2` for `engine: aretomo2` or `imod_raptor` (one
-  full tomogram each, no even/odd split). Any other pairing crashes trying
-  to open `None` as a file. With `isonet2`, refine and predict read the
-  deconvolved tomograms when `deconv` is enabled (it must have run on the
-  star: `--start-from deconv`), the raw ones otherwise.
+- **`isonet.refine.method` must match the engine**: `isonet2-n2n` for
+  `engine: aretomo3` (EVN/ODD halves), `isonet2` for `engine: aretomo2` or
+  `imod_raptor` (full tomograms, no even/odd split). Using `isonet2-n2n`
+  against a full-tomogram star file crashes trying to open `None` as a file (the
+  half-tomogram columns aren't populated).
 - **How IsoNet2 gets AreTomo3's volumes and tilt range.** AreTomo3 writes
   volumes with the slab thickness along Y (its default `-FlipVol 0`), but
   IsoNet2 assumes Z is the beam direction: its missing-wedge mask,
@@ -376,13 +374,14 @@ real `relion_tomo_subtomo` run (all picked particles extracted); the
   decides where `refine` centres its training cubes — `predict` corrects
   the whole tomogram either way — so `make_mask` masks only the tomograms
   `refine` trains on. Re-run from `make_mask` after changing either option.
-- **`deconv` is skipped for `engine: aretomo3`**, even when enabled. This
-  pipeline only ever organizes AreTomo3 output into EVN/ODD half-tomograms
-  (no full tomogram), so `deconv`'s default input column stays unset and it
-  would error. It also wouldn't help even if pointed at the halves:
-  IsoNet2's `isonet2-n2n` training path reads the half-tomogram columns
-  directly and ignores `deconv`'s output entirely. It runs (when enabled)
-  for AreTomo2 and IMOD, whose single-tomogram `isonet2` method uses it.
+- **`deconv` is disabled by default.** With the default `engine: aretomo3`,
+  this pipeline only ever organizes AreTomo3 output into EVN/ODD half-tomograms (no full tomogram), so
+  `deconv`'s default input column stays unset and it would error. It also
+  wouldn't help even if pointed at the halves: IsoNet2's `isonet2-n2n`
+  training path reads the half-tomogram columns directly and ignores
+  `deconv`'s output entirely. `deconv` only matters if you extend
+  `organize` to also produce a full tomogram and use IsoNet2's
+  single-tomogram `isonet2` method instead.
 - **IsoNet2's own training loop is `for step in range(save_interval,
   epochs+1, save_interval)`.** If `epochs < save_interval` that range is
   empty — it silently trains for zero epochs, exits 0, and writes no
