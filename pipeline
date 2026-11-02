@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Run the pipeline from any account on this machine, by config number:
+#   ./pipeline list | new <name> [--from N] | edit N | run N [options]
+# (see numbered_configs.py). Machine-specific settings go in pipeline.local
+# next to this script (not in git): which Python has the pipeline's
+# packages, and PATH additions for tools the configs call by bare name, e.g.
+#   PIPELINE_PYTHON=/path/to/env/bin/python3
+#   PATH="$PATH:/opt/AreTomo3"
+REPO="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+PIPELINE_PYTHON=python3
+if [ -f "$REPO/pipeline.local" ]; then
+    . "$REPO/pipeline.local"
+fi
+export PATH
+# as in install.sh's launchers: packages in ~/.local can shadow the environment's
+export PYTHONNOUSERSITE=1
+exec "$PIPELINE_PYTHON" "$REPO/numbered_configs.py" "$@"

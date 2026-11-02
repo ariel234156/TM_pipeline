@@ -12,3 +12,8 @@ deconv/
 mask/
 isonet_maps/
 corrected_tomos/
+
+# Numbered configs (./pipeline new) and this machine's launcher settings:
+# real paths of whoever made them.
+configs/*.yaml
+pipeline.local

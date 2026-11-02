@@ -139,6 +139,34 @@ Useful flags:
 `refine` is a real GPU training job; run it under `tmux`/`screen` or in the
 background rather than in a session that might get interrupted.
 
+## Several users on one machine: numbered configs
+
+Instead of everyone editing one `pipeline_config.yaml`, each dataset gets
+its own numbered config in `configs/` (`001_HPT_test.yaml`,
+`004_UriTomos.yaml`, ...), run through `./pipeline` from any account:
+
+```bash
+./pipeline list                          # number, owner, engine, raw data, who is running it
+./pipeline new MyData --from 4           # copy config 4 (or a file, or a run log) to the next number
+./pipeline edit 5                        # web form for config 5
+./pipeline run 5 --dry-run               # check, then:
+./pipeline run 5                         # any run_pipeline.py option works: --start-from refine ...
+```
+
+`configs/` is writable by everyone with the sticky bit (`chmod 1777`, like
+`/tmp`): anyone can add a config, only its owner can change or delete it,
+so copy someone else's with `new --from N` and give it your own output
+folders (you usually can't write into theirs). A run locks its config
+(a file in `/tmp`), so one config can't run twice at once.
+
+`./pipeline` runs with the Python and `PATH` set in `pipeline.local`, next
+to it (machine-specific, not in git):
+
+```bash
+PIPELINE_PYTHON=/path/to/env/bin/python3   # has the packages in requirements.txt
+PATH="$PATH:/opt/AreTomo3"                 # tools the configs call by bare name
+```
+
 ## Files
 
 | File | What it does |
@@ -155,6 +183,7 @@ background rather than in a session that might get interrupted.
 | `find_gain_defects.py` | Writes an AreTomo3 `-DefectFile` from a gain reference (needs numpy + tifffile) |
 | `pipeline_config.example.yaml` | Template config — copy to `pipeline_config.yaml` and edit |
 | `config_editor.py` | Local web form for editing the config |
+| `pipeline`, `numbered_configs.py` | List, copy, edit and run numbered configs from any account (see above) |
 | `install.sh` | Checks for, and installs if missing, all the software above (see Installation) |
 | `requirements.txt` | The pipeline's own Python dependencies (`install.sh` installs them too) |
 
