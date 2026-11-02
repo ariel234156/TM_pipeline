@@ -89,15 +89,19 @@ etc.) — either by hand, or with the included web form:
 
 ```bash
 ~/cryoet_software/bin/cryoet-config-editor     # or: python3 config_editor.py
-# prints e.g. "Open http://localhost:8766" -- open that address
+# prints e.g. "Open http://localhost:8766/?token=..." -- open that link
 ```
 
 Several people can run the editor at once on the same machine: each one
 takes the first free port in 8765–8770 (`--port 8767` or `--port 9000-9005`
-to choose). Each person can also point it at their own config with
-`--config my_config.yaml`. If two people have the same file open, a save
-from a page that's out of date is refused instead of silently undoing the
-other person's changes; reload and save again.
+to choose). Each person should edit their own numbered config
+(`./pipeline edit N`, see below), not a shared one. Every account on the
+machine can reach `localhost`, and the editor saves as whoever started it,
+so the page only opens with the token from the printed link. A config you
+can't write opens read-only, with the commands for a numbered copy of your
+own. If two people have the same file open, a save from a page that's out
+of date is refused instead of silently undoing the other person's changes;
+reload and save again.
 
 `config_editor.py` is a small local web server (stdlib + PyYAML only, no
 extra dependencies) covering every active parameter and raw path in the

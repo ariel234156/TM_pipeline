@@ -8,11 +8,16 @@ Usage:
     python3 config_editor.py --config my_config.yaml --port 8767
 
 Several people can run it at the same time on one machine: by default it
-takes the first free port in 8765-8770 and prints which one it got -- open
-http://localhost:<that port> in a browser. --port takes one port (8767) or
-a range (8765-8770). Over SSH/VSCode Remote, the port is auto-forwarded --
-no extra setup needed. The server binds to 127.0.0.1 only (not reachable
-from the network) since it can rewrite the config file.
+takes the first free port in 8765-8770 and prints a link to open in a
+browser. --port takes one port (8767) or a range (8765-8770). Over
+SSH/VSCode Remote, the port is auto-forwarded -- no extra setup needed.
+The server binds to 127.0.0.1 only (not reachable from the network), but
+every account on this machine shares 127.0.0.1 and the editor saves as
+whoever started it, so the page only opens with the random token in that
+link (on 2026-11-02 one user's config was switched to another user's
+dataset, most likely from that user's browser on this machine opening
+localhost:8765). A config you can't write is shown read-only, with how to
+make a numbered copy of your own (see numbered_configs.py).
 
 If two people have the same config file open, a save is refused when the
 file changed after that page was loaded (saved from another editor, or
@@ -39,14 +44,17 @@ run_pipeline.py yourself afterward, as before.
 """
 import argparse
 import errno
+import getpass
 import hashlib
 import html
 import json
+import os
 import re
+import secrets
 import yaml
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlparse
 
 # (dotted_path, label, kind) or (dotted_path, label, kind, options) -- kind
 # is one of: str, path, int, float, bool, intlist, str_or_null, select
@@ -315,8 +323,18 @@ def file_signature(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def read_only_message(config_path: Path) -> str:
+    """Why a config this account can't write is shown read-only, and the
+    way to a numbered copy of its own."""
+    return (f"{config_path.name} belongs to {config_path.owner()} -- you can look, not save. "
+            f"For your own data, make your own numbered copy and edit that: "
+            f"cd {Path(__file__).resolve().parent}; ./pipeline new <name> --from "
+            f"{config_path.resolve()}; ./pipeline edit <its number>")
+
+
 def render_form(cfg: dict, active: set, message: str = "", error: str = "",
-                file_sig: str = "") -> str:
+                file_sig: str = "", file_name: str = "pipeline_config.yaml",
+                read_only: str = "", token: str = "") -> str:
     parts = ["""<!doctype html><html><head><meta charset="utf-8">
 <title>Pipeline config editor</title>
 <style>
@@ -342,8 +360,11 @@ section[hidden]{display:none}
         parts.append(f'<div class="msg ok">{html.escape(message)}</div>')
     if error:
         parts.append(f'<div class="msg err">{html.escape(error)}</div>')
+    if read_only:
+        parts.append(f'<div class="msg err">{html.escape(read_only)}</div>')
     parts.append('<form method="post" action="/save">')
     parts.append(f'<input type="hidden" name="_file_sig" value="{file_sig}">')
+    parts.append(f'<input type="hidden" name="_token" value="{html.escape(token)}">')
     for section_title, fields, engine_filter in SECTIONS:
         attr = f' data-engine="{html.escape(engine_filter)}"' if engine_filter else ""
         parts.append(f"<section{attr}><h2>{html.escape(section_title)}</h2>")
@@ -385,7 +406,8 @@ section[hidden]{display:none}
                     f'<input type="text" id="{name}" name="{name}" value="{val}"></div>'
                 )
         parts.append("</section>")
-    parts.append('<button type="submit">Save to pipeline_config.yaml</button></form>')
+    parts.append(f'<button type="submit"{" disabled" if read_only else ""}>'
+                 f'Save to {html.escape(file_name)}</button></form>')
     parts.append("""<script>
 (function(){
   var sel = document.getElementById("engine");
@@ -473,9 +495,16 @@ def apply_updates(config_path: Path, form: dict) -> None:
 
 class Handler(BaseHTTPRequestHandler):
     config_path: Path = None  # set by main()
+    token: str = None  # set by main(); the page only opens with it
 
     def log_message(self, fmt, *args):
         pass  # keep the terminal quiet
+
+    def _refuse(self):
+        self._send_html(
+            f"<p>This editor was started by {html.escape(getpass.getuser())} and saves as "
+            f"them. Open the link (with ?token=...) that its terminal printed. To edit a "
+            f"config of your own, start your own editor: ./pipeline edit N</p>", 403)
 
     def _send_html(self, body: str, status: int = 200):
         encoded = body.encode("utf-8")
@@ -486,8 +515,12 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(encoded)
 
     def do_GET(self):
-        if self.path not in ("/", ""):
+        url = urlparse(self.path)
+        if url.path not in ("/", ""):
             self._send_html("Not found", 404)
+            return
+        if not secrets.compare_digest(parse_qs(url.query).get("token", [""])[0], self.token):
+            self._refuse()
             return
         self._send_html(self._form())
 
@@ -498,18 +531,25 @@ class Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(length).decode("utf-8")
         form = parse_qs(body, keep_blank_values=True)
+        if not secrets.compare_digest(form.get("_token", [""])[0], self.token):
+            self._refuse()
+            return
         try:
             apply_updates(self.config_path, form)
             self._send_html(self._form(message=f"Saved to {self.config_path}"))
         except StaleFormError as exc:
             self._send_html(self._form(error=f"Not saved -- {exc}"), status=409)
+        except PermissionError:
+            self._send_html(self._form(), status=403)  # the form says why
         except Exception as exc:
             self._send_html(self._form(error=f"Not saved -- {exc}"), status=400)
 
     def _form(self, **kw) -> str:
         text = self.config_path.read_text()
+        read_only = "" if os.access(self.config_path, os.W_OK) else read_only_message(self.config_path)
         return render_form(yaml.safe_load(text), set(index_paths(text.split("\n"))),
-                           file_sig=file_signature(text), **kw)
+                           file_sig=file_signature(text), file_name=self.config_path.name,
+                           read_only=read_only, token=self.token, **kw)
 
 
 def parse_ports(spec: str) -> list:
@@ -536,6 +576,7 @@ def main():
         raise SystemExit(f"{args.config} not found -- copy pipeline_config.example.yaml first")
 
     Handler.config_path = args.config
+    Handler.token = secrets.token_urlsafe(16)
     server = None
     for port in args.port:
         try:
@@ -549,7 +590,9 @@ def main():
                          f"editor per port) -- stop one, or pass --port with a free one")
     port = server.server_address[1]
     print(f"Editing {args.config}")
-    print(f"Open http://localhost:{port} in your browser (Ctrl+C to stop)")
+    print(f"Open http://localhost:{port}/?token={Handler.token} in your browser (Ctrl+C to stop)")
+    if not os.access(args.config, os.W_OK):
+        print(read_only_message(args.config))
     try:
         server.serve_forever()
     except KeyboardInterrupt:
