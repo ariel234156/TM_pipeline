@@ -678,6 +678,32 @@ def write_filtered_star(star_file: Path, keep_indices: set, suffix: str,
     return out_path
 
 
+def drop_non_tomograms(star_file: Path) -> None:
+    """prepare_star --full lists every file in its folder, and for
+    aretomo2/imod_raptor that folder (organize.out_dir) also holds the star
+    files themselves: deconv then read tomograms.star as a tomogram and
+    crashed after 140 of 143 rows (UriTomos, 2026-11-02). Drops the rows
+    whose rlnTomoName isn't a .mrc/.rec file and renumbers rlnIndex 1..N."""
+    lines = Path(star_file).read_text().splitlines()
+    columns, rows = _star_table(lines)
+    c_name, c_index = columns["_rlnTomoName"], columns["_rlnIndex"]
+    rows, out, dropped, index = set(rows), [], [], 0
+    for n, line in enumerate(lines):
+        if n in rows:
+            fields = line.split()
+            if not fields[c_name].lower().endswith((".mrc", ".rec")):
+                dropped.append(Path(fields[c_name]).name)
+                continue
+            index += 1
+            fields[c_index] = str(index)
+            line = "\t".join(fields)
+        out.append(line)
+    if dropped:
+        Path(star_file).write_text("\n".join(out) + "\n")
+        print(f"prepare_star: dropped {len(dropped)} rows that aren't tomograms "
+              f"({', '.join(dropped)}) -- {index} tomograms left")
+
+
 def apply_aln_tilt_ranges(star_file: Path, organize_out_dir) -> None:
     """isonet.py prepare_star takes one --tilt_min/--tilt_max for every
     tomogram, but AreTomo3 reconstructs each one with its own measured
@@ -915,6 +941,8 @@ def main():
             isonet2_steps.prepare_star(
                 pixel_size, full_dir=full_dir,
                 isonet_bin=isonet_bin, dry_run=args.dry_run, **ps_cfg)
+            if not args.dry_run:
+                drop_non_tomograms(star_file)
         else:
             isonet2_steps.prepare_star(
                 pixel_size, "[" + ",".join(str(d) for d in defocus_list) + "]",
