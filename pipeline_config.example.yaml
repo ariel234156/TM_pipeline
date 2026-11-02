@@ -26,6 +26,14 @@
 
 aretomo_bin: AreTomo3      # path to the AreTomo3 binary, if not on PATH
 aretomo2_bin: AreTomo2     # path to the AreTomo2 binary, if not on PATH (only used when engine: aretomo2)
+
+# skip_denoise: true skips IsoNet2 (prepare_star, deconv, make_mask, refine,
+# predict) and runs template matching straight on organize's tomograms
+# (aretomo3: organize then also writes the full volumes to
+# <organize.out_dir>/FULL). Same as --skip-denoise on the command line.
+# Give pytom.out_dir its own folder for such runs, or they overwrite the
+# template matching results of denoised runs.
+skip_denoise: false
 # isonet.py -- a bare command name like this depends on PATH at run time,
 # which depends on the right environment (conda/venv/etc.) being activated
 # in whatever shell launches run_pipeline.py. If more than one isonet.py
@@ -458,7 +466,7 @@ isonet:
 #   reference_map_voxel_size_angstrom: 0.305   # the reference map's OWN native pixel size -- see GOTCHA above
 #   particle_diameter_angstrom: 150     # in Angstrom, along the longest axis for non-globular particles
 #   voxel_size_angstrom: 6.04           # must match isonet.predict's REAL output pixel size -- see GOTCHA above
-#   # tomogram_dir:                     # defaults to isonet.predict.output_dir above
+#   # tomogram_dir:                     # defaults to isonet.predict.output_dir above (organize's tomograms with skip_denoise)
 #   out_dir: /path/to/template_matching
 #   gpu: [0, 1, 2, 3]
 #   # center: true                     # center the reference's density by center of mass (default true)

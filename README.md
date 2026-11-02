@@ -128,6 +128,13 @@ Useful flags:
   running the IsoNet2 side against AreTomo3 output you already have:
   `--start-from organize`.
 - `--dry-run` — print every command without executing it.
+- `--skip-denoise` (or `skip_denoise: true` in the config) — skip IsoNet2
+  (`prepare_star` to `predict`) and run template matching straight on
+  `organize`'s tomograms: IMOD/AreTomo2 tomograms as they are, AreTomo3's
+  full volumes rotated to Z along the beam into `<organize.out_dir>/FULL`.
+  For AreTomo3, `organize` must run with it on (`--start-from organize
+  --skip-denoise`). Use a separate `pytom.out_dir`, or the results
+  overwrite those of a denoised run.
 
 `refine` is a real GPU training job; run it under `tmux`/`screen` or in the
 background rather than in a session that might get interrupted.

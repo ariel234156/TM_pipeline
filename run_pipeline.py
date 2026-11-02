@@ -28,6 +28,8 @@ Usage:
     python3 run_pipeline.py --config pipeline_config.yaml --dry-run
     python3 run_pipeline.py --config pipeline_config.yaml --start-from refine
     python3 run_pipeline.py --config pipeline_config.yaml --stop-after deconv
+    python3 run_pipeline.py --config pipeline_config.yaml --skip-denoise
+        (no IsoNet2: template matching straight on organize's tomograms)
 
 Every tunable AreTomo3/AreTomo2/IMOD+RAPTOR and IsoNet2 parameter lives in
 the YAML config (copy pipeline_config.example.yaml and edit it) -- this
@@ -60,6 +62,9 @@ import relion5_star
 STAGES = ["aretomo", "imod_align", "imod_reconstruct", "relion5_star", "organize",
           "prepare_star", "deconv", "make_mask", "refine", "predict",
           "tm_template", "tm_mask", "tm_match", "tm_extract", "tm_merge", "tm_figure"]
+# skipped with skip_denoise / --skip-denoise: template matching then runs on
+# organize's tomograms instead of IsoNet2's
+DENOISE_STAGES = ["prepare_star", "deconv", "make_mask", "refine", "predict"]
 
 
 def log_run_params(cfg: dict, config_path: Path) -> Path:
@@ -72,22 +77,28 @@ def log_run_params(cfg: dict, config_path: Path) -> Path:
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     out_path = target_dir / f"pipeline_params_{timestamp}.txt"
     header = (f"# Pipeline run started {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
-              f"# Config source: {config_path.resolve()}\n\n")
+              f"# Config source: {config_path.resolve()}\n"
+              f"# Command: {' '.join(sys.argv)}\n\n")
     out_path.write_text(header + config_path.read_text())
     print(f"Parameters logged to: {out_path}")
     return out_path
 
 
-def run_organize(cfg: dict, aretomo_out_dir: Path, dry_run: bool):
+def run_organize(cfg: dict, aretomo_out_dir: Path, dry_run: bool, write_full: bool = False):
     """In-process equivalent of organize_for_isonet2.py's main(): reuses the
     same find_candidates/check_pair/parse_ctf_defocus_near_zero/link_or_copy
     functions so behavior stays identical, but returns the EVN/ODD dirs,
     pixel size and defocus list as Python objects for the next stage
-    instead of just printing the follow-up command."""
+    instead of just printing the follow-up command.
+
+    write_full (skip_denoise): also put each full volume (<base>_Vol.mrc)
+    in out_dir/FULL, in the same Z-along-the-beam layout as EVN/ODD, for
+    template matching to run on without IsoNet2."""
     in_dir = Path(aretomo_out_dir)
     out_dir = Path(cfg["out_dir"])
     evn_dir = out_dir / "EVN"
     odd_dir = out_dir / "ODD"
+    full_dir = out_dir / "FULL"
 
     pixel_size = cfg.get("pixel_size")
     if pixel_size is None:
@@ -99,11 +110,14 @@ def run_organize(cfg: dict, aretomo_out_dir: Path, dry_run: bool):
         pixel_size = raw * binf
 
     if dry_run:
-        print(f"+ [dry-run] would organize {in_dir} -> {evn_dir}, {odd_dir}")
+        print(f"+ [dry-run] would organize {in_dir} -> {evn_dir}, {odd_dir}"
+              + (f", {full_dir}" if write_full else ""))
         return evn_dir, odd_dir, pixel_size, []
 
     evn_dir.mkdir(parents=True, exist_ok=True)
     odd_dir.mkdir(parents=True, exist_ok=True)
+    if write_full:
+        full_dir.mkdir(parents=True, exist_ok=True)
 
     log = []
     included = []  # (base, defocus, ctf_score), same order as evn_dir file creation
@@ -128,6 +142,11 @@ def run_organize(cfg: dict, aretomo_out_dir: Path, dry_run: bool):
         prep.place_volume(odd, odd_dst, copy)
         if how.startswith("rotated"):
             log.append((base, "OK", f"EVN/ODD {how} to Z-along-the-beam for IsoNet2"))
+        if write_full and full.exists():
+            how = prep.place_volume(full, full_dir / full.name, copy)
+            log.append((base, "OK", f"full volume {how} for template matching"))
+        elif write_full:
+            log.append((base, "WARN", "no full volume -- left out of template matching"))
         included.append((base, defocus, ctf_score, tilt_range))
 
     for base, status, detail in log:
@@ -163,7 +182,8 @@ def run_organize(cfg: dict, aretomo_out_dir: Path, dry_run: bool):
         for base, _defocus, _score, tilt in included:
             writer.writerow([base, *(("", "") if tilt is None else tilt)])
 
-    print(f"organize: {len(included)} tilt series -> {evn_dir}, {odd_dir}")
+    print(f"organize: {len(included)} tilt series -> {evn_dir}, {odd_dir}"
+          + (f", {full_dir}" if write_full else ""))
     print(f"organize: CTF scores written to {scores_path} (for isonet.refine.top_ctf_n)")
     print(f"organize: per-tomogram tilt ranges from the .aln files written to {ranges_path}")
     return evn_dir, odd_dir, pixel_size, defocus_list
@@ -658,6 +678,9 @@ def main():
     ap.add_argument("--stop-after", choices=STAGES, default=STAGES[-1])
     ap.add_argument("--dry-run", action="store_true",
                      help="print every command that would run, without running it")
+    ap.add_argument("--skip-denoise", action="store_true",
+                     help="skip IsoNet2 and run template matching on organize's tomograms "
+                          "(same as skip_denoise: true in the config)")
     args = ap.parse_args()
 
     cfg = yaml.safe_load(args.config.read_text())
@@ -666,8 +689,11 @@ def main():
     stop_idx = STAGES.index(args.stop_after)
     if start_idx > stop_idx:
         ap.error("--start-from must come before or equal to --stop-after")
+    skip_denoise = args.skip_denoise or bool(cfg.get("skip_denoise", False))
 
     def active(stage):
+        if skip_denoise and stage in DENOISE_STAGES:
+            return False
         return start_idx <= STAGES.index(stage) <= stop_idx
 
     engine = cfg.get("engine", "aretomo3")
@@ -692,6 +718,9 @@ def main():
 
     star_name = isonet_cfg.get("prepare_star", {}).get("star_name", "tomograms.star")
     star_file = Path(organize_cfg.get("out_dir", ".")) / star_name
+    if skip_denoise:
+        print(f"skip_denoise: skipping {', '.join(DENOISE_STAGES)} -- template matching "
+              f"runs on organize's tomograms")
 
     if active("aretomo"):
         if engine == "aretomo2":
@@ -797,7 +826,7 @@ def main():
                 pixel_size = eng_cfg.get("pixel_size_angstrom", 1.0) * eng_cfg.get("bin_factor", 1.0)
         else:
             evn_dir, odd_dir, pixel_size, defocus_list = run_organize(
-                organize_cfg, aretomo_out_dir, args.dry_run)
+                organize_cfg, aretomo_out_dir, args.dry_run, write_full=skip_denoise)
 
     if active("prepare_star"):
         ps_cfg = dict(isonet_cfg.get("prepare_star", {}))
@@ -912,8 +941,21 @@ def main():
         isonet2_steps.predict(star_file, model, isonet_bin=isonet_bin, dry_run=args.dry_run, **pr_cfg)
 
     pytom_cfg = cfg.get("pytom", {})
-    tomogram_dir = Path(pytom_cfg.get(
-        "tomogram_dir", isonet_cfg.get("predict", {}).get("output_dir", "corrected_tomos")))
+    if "tomogram_dir" in pytom_cfg:
+        tomogram_dir = Path(pytom_cfg["tomogram_dir"])
+    elif skip_denoise:
+        # organize's tomograms: aretomo3's full volumes (FULL/, which
+        # run_organize writes only with skip_denoise on), or the clean dir
+        # of aretomo2/imod_raptor tomograms
+        tomogram_dir = (Path(organize_cfg["out_dir"]) / "FULL" if engine == "aretomo3" else
+                        Path(organize_cfg.get("out_dir", Path(aretomo_out_dir) / "tomograms")))
+    else:
+        tomogram_dir = Path(isonet_cfg.get("predict", {}).get("output_dir", "corrected_tomos"))
+    if skip_denoise and any(active(s) for s in ("tm_match", "tm_figure")):
+        print(f"skip_denoise: template matching on the tomograms in {tomogram_dir}")
+        if not args.dry_run and not any(tomogram_dir.glob("*.mrc")):
+            raise RuntimeError(f"skip_denoise: no tomograms in {tomogram_dir} -- run organize "
+                               f"with it on first: --start-from organize --skip-denoise")
     template_file = Path(pytom_cfg.get("out_dir", ".")) / "template.mrc"
     mask_file = Path(pytom_cfg.get("out_dir", ".")) / "mask.mrc"
     match_destinations = {}
