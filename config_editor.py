@@ -429,6 +429,11 @@ section[hidden]{display:none}
                      '<p class="note">Saves the values above as the next free number in '
                      'configs/, owned by you; run it with ./pipeline run &lt;number&gt;.</p>'
                      '<button type="submit" formaction="/save_new">Save as new numbered config</button>')
+    else:
+        parts.append('<p class="note">This copy of the editor can\'t make numbered configs '
+                     '(no numbered_configs.py next to it). For "Save as new numbered config", '
+                     'open it from the pipeline folder instead: ./pipeline edit N, or '
+                     './pipeline edit /path/to/this.yaml</p>')
     parts.append('</form>')
     parts.append("""<script>
 (function(){
