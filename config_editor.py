@@ -80,6 +80,7 @@ SECTIONS = [
          [("aretomo3", "AreTomo3 (raw frames + .mdoc)"),
           ("aretomo2", "AreTomo2 (pre-assembled tilt series .mrc)"),
           ("imod_raptor", "IMOD + RAPTOR (fiducial-based)")]),
+        ("log_dir", "Pipeline run-log folder (every engine)", "path"),
         # isonet_bin is deliberately NOT editable here: it can be either a
         # plain string or a [python_path, script_path] list (see the
         # comment above it in the YAML), and this editor's "str" kind

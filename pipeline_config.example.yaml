@@ -46,6 +46,12 @@ skip_denoise: false
 #   isonet_bin: ["/path/to/your/env/bin/python", "/path/to/isonet.py"]
 isonet_bin: isonet.py
 
+# Pipeline run log, for every engine: each real run writes a copy of this
+# config (and its command line) here as pipeline_params_<date>_<time>.txt.
+# Separate from aretomo.log_dir (AreTomo3's own -LogDir), which is used
+# instead when this line is missing.
+log_dir: /mnt/cryonas02/Users/Gabriel_Frank/Ariel_Cohen/test_ferr/aretomo3_out_bin8
+
 # ---------------------------------------------------------------------------
 # Stage 1: AreTomo3 -- motion correction, CTF, alignment, WBP reconstruction.
 # Keys map to AreTomo3 flags via aretomo_step.FLAG_MAP. Values mirror

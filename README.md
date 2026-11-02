@@ -125,6 +125,11 @@ And for a real run:
 python3 run_pipeline.py --config pipeline_config.yaml
 ```
 
+Every real run writes a copy of its config and command line to the
+top-level `log_dir` (the run-log folder, for every engine) as
+`pipeline_params_<date>_<time>.txt`. Configs without `log_dir` use
+`aretomo.log_dir`, AreTomo3's own log folder, as before.
+
 Useful flags:
 
 - `--start-from <stage>` / `--stop-after <stage>` — run only part of the
@@ -172,7 +177,8 @@ read-only), put in your paths, and save it as a new number.
 `configs/` is writable by everyone with the sticky bit (`chmod 1777`, like
 `/tmp`): anyone can add a config, only its owner can change or delete it,
 so copy someone else's (`new --from N`, or Save as new in the form) and
-give it your own output folders (you usually can't write into theirs). A
+give it your own output folders and `log_dir` (you usually can't write
+into theirs). A
 run locks its config (a file in `/tmp`), so one config can't run twice at
 once.
 

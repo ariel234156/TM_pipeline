@@ -69,10 +69,11 @@ DENOISE_STAGES = ["prepare_star", "deconv", "make_mask", "refine", "predict"]
 
 def log_run_params(cfg: dict, config_path: Path, dry_run: bool = False) -> Path:
     """Write a timestamped copy of the resolved config to a .txt file in
-    aretomo.log_dir (falling back to the current directory), so every run
-    leaves a record of exactly which parameters produced its output. Not
-    for a dry run: its log would read as a real run's."""
-    log_dir = cfg.get("aretomo", {}).get("log_dir")
+    log_dir (else aretomo.log_dir, AreTomo3's own -LogDir, which every
+    engine used before log_dir existed; else the current directory), so
+    every run leaves a record of exactly which parameters produced its
+    output. Not for a dry run: its log would read as a real run's."""
+    log_dir = cfg.get("log_dir") or cfg.get("aretomo", {}).get("log_dir")
     target_dir = Path(log_dir) if log_dir else Path(".")
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     out_path = target_dir / f"pipeline_params_{timestamp}.txt"
