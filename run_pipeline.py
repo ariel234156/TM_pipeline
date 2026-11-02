@@ -616,6 +616,39 @@ def warn_missing_masks(star_file: Path) -> None:
                   f"will sample it unmasked; re-run with --start-from make_mask", file=sys.stderr)
 
 
+def single_tomo_column(star_file: Path, rows, method: str, deconv_on: bool):
+    """The --input_column to pass refine/predict, or None for isonet.py's
+    own default. Single-tomogram training (method isonet2; "auto" without
+    even/odd halves) reads each tomogram from --input_column, default
+    rlnDeconvTomoName, which stays "None" until deconv has run on the star:
+    refine then dies with FileNotFoundError: 'None' (UriTomos, 2026-11-02).
+    isonet2-n2n reads the EVN/ODD halves and ignores it. rows: the rlnIndex
+    values to check (None: all)."""
+    if method in ("isonet2-n2n", "n2n"):
+        return None
+    lines = Path(star_file).read_text().splitlines()
+    columns, data_rows = _star_table(lines)
+    picked = [lines[n].split() for n in data_rows
+              if rows is None or int(lines[n].split()[columns["_rlnIndex"]]) in rows]
+
+    def filled(column):
+        return column in columns and all(f[columns[column]] != "None" for f in picked)
+
+    if method in ("auto", None, "") and filled("_rlnTomoReconstructedTomogramHalf1"):
+        return None  # isonet.py's auto picks isonet2-n2n
+    if filled("_rlnDeconvTomoName"):
+        return None
+    if deconv_on:
+        raise RuntimeError(f"isonet.deconv is enabled but {Path(star_file).name} has no "
+                           f"deconvolved tomograms yet (rlnDeconvTomoName is None) -- run "
+                           f"deconv first: --start-from deconv")
+    if not filled("_rlnTomoName"):
+        raise RuntimeError(f"isonet.refine.method {method} trains on full tomograms, but "
+                           f"{Path(star_file).name} has none (rlnTomoName is None: even/odd "
+                           f"halves only) -- set isonet.refine.method to isonet2-n2n")
+    return "rlnTomoName"
+
+
 def write_filtered_star(star_file: Path, keep_indices: set, suffix: str,
                         dry_run: bool = False) -> Path:
     """isonet.py's refine has no --tomo_idx flag (unlike deconv/make_mask/
@@ -896,6 +929,12 @@ def main():
             isonet2_steps.deconv(star_file, isonet_bin=isonet_bin, dry_run=args.dry_run, **dc_cfg)
 
     refine_selection = {k: isonet_cfg.get("refine", {}).get(k) for k in ("train_tomos", "top_ctf_n")}
+    refine_method = isonet_cfg.get("refine", {}).get("method", "auto")
+    deconv_on = isonet_cfg.get("deconv", {}).get("enabled", True)
+    # whether star_file already holds what refine/predict will read: in a
+    # dry run, prepare_star or deconv running first would still change it
+    star_settled = Path(star_file).exists() and not (
+        args.dry_run and (star_rewritten or (deconv_on and active("deconv"))))
 
     def training_rows():
         """select_training_indices on star_file -- with star_rewritten only a
@@ -910,6 +949,16 @@ def main():
                   f"{star_file}, which prepare_star rewrites first: {e}", file=sys.stderr)
             return None
         return keep, why and f"{why}; previewed on the current {star_file.name}"
+
+    # which star column refine/predict read single tomograms from -- checked
+    # here, before make_mask, so a run that would stop at refine stops now
+    refine_column = predict_column = None
+    if star_settled and active("refine") and "input_column" not in isonet_cfg.get("refine", {}):
+        selection = training_rows() if any(refine_selection.values()) else None
+        refine_column = single_tomo_column(star_file, selection and selection[0], refine_method,
+                                           deconv_on)
+    if star_settled and active("predict") and "input_column" not in isonet_cfg.get("predict", {}):
+        predict_column = single_tomo_column(star_file, None, refine_method, deconv_on)
 
     if active("make_mask"):
         mm_cfg = dict(isonet_cfg.get("make_mask", {}))
@@ -958,6 +1007,10 @@ def main():
             # 2026-10-28: stopped at epoch 10 of 50). Point it at a row
             # that is actually in the filtered star.
             rf_cfg.setdefault("prev_tomo_idx", min(keep))
+        if refine_column:
+            rf_cfg["input_column"] = refine_column
+            print(f"refine: isonet.deconv is off -- training on {refine_column} "
+                  f"(isonet.py's default, rlnDeconvTomoName, is None)")
         if not args.dry_run:
             if mask_mode == "none":
                 clear_mask_names(refine_star_file)
@@ -986,6 +1039,9 @@ def main():
             else:
                 model = candidates[-1]
                 print(f"predict: no model set in config, using most recent checkpoint: {model}")
+        if predict_column:
+            pr_cfg["input_column"] = predict_column
+            print(f"predict: isonet.deconv is off -- correcting {predict_column}")
         isonet2_steps.predict(star_file, model, isonet_bin=isonet_bin, dry_run=args.dry_run, **pr_cfg)
 
     pytom_cfg = cfg.get("pytom", {})

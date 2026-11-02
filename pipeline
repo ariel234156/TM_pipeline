@@ -14,4 +14,8 @@ fi
 export PATH
 # as in install.sh's launchers: packages in ~/.local can shadow the environment's
 export PYTHONNOUSERSITE=1
+# and so can a personal PYTHONPATH: one in ~/.bashrc pointing at the old
+# IsoNet2 beta made isonet_bin's pinned git checkout load the beta's
+# models/ for that user only (2026-11-02)
+unset PYTHONPATH
 exec "$PIPELINE_PYTHON" "$REPO/numbered_configs.py" "$@"
