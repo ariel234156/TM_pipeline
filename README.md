@@ -163,11 +163,18 @@ its own numbered config in `configs/` (`001_HPT_test.yaml`,
 ./pipeline run 5                         # any run_pipeline.py option works: --start-from refine ...
 ```
 
+The web form's **Save as new numbered config** (name box at the bottom)
+also makes a number: it saves the form's values as the next free number,
+owned by you, and the page then edits that one. So the quickest way to
+start on your own data is `./pipeline edit 4` (someone else's config opens
+read-only), put in your paths, and save it as a new number.
+
 `configs/` is writable by everyone with the sticky bit (`chmod 1777`, like
 `/tmp`): anyone can add a config, only its owner can change or delete it,
-so copy someone else's with `new --from N` and give it your own output
-folders (you usually can't write into theirs). A run locks its config
-(a file in `/tmp`), so one config can't run twice at once.
+so copy someone else's (`new --from N`, or Save as new in the form) and
+give it your own output folders (you usually can't write into theirs). A
+run locks its config (a file in `/tmp`), so one config can't run twice at
+once.
 
 `./pipeline` runs with the Python and `PATH` set in `pipeline.local`, next
 to it (machine-specific, not in git):

@@ -16,8 +16,12 @@ every account on this machine shares 127.0.0.1 and the editor saves as
 whoever started it, so the page only opens with the random token in that
 link (on 2026-11-02 one user's config was switched to another user's
 dataset, most likely from that user's browser on this machine opening
-localhost:8765). A config you can't write is shown read-only, with how to
-make a numbered copy of your own (see numbered_configs.py).
+localhost:8765). A config you can't write is shown read-only.
+
+"Save as new numbered config" (when numbered_configs.py is next to this
+file) saves the form's values as configs/NNN_<name>.yaml at the next free
+number, owned by whoever started the editor, and the page then edits that
+file -- the way to start your own config from someone else's.
 
 If two people have the same config file open, a save is refused when the
 file changed after that page was loaded (saved from another editor, or
@@ -55,6 +59,11 @@ import yaml
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
+
+try:
+    import numbered_configs  # next to this file in the repo, not in older copies
+except ImportError:
+    numbered_configs = None
 
 # (dotted_path, label, kind) or (dotted_path, label, kind, options) -- kind
 # is one of: str, path, int, float, bool, intlist, str_or_null, select
@@ -326,6 +335,9 @@ def file_signature(text: str) -> str:
 def read_only_message(config_path: Path) -> str:
     """Why a config this account can't write is shown read-only, and the
     way to a numbered copy of its own."""
+    if numbered_configs:
+        return (f"{config_path.name} belongs to {config_path.owner()} -- you can't save to it. "
+                f"For your own data, put it in and use 'Save as new numbered config' below.")
     return (f"{config_path.name} belongs to {config_path.owner()} -- you can look, not save. "
             f"For your own data, make your own numbered copy and edit that: "
             f"cd {Path(__file__).resolve().parent}; ./pipeline new <name> --from "
@@ -334,7 +346,7 @@ def read_only_message(config_path: Path) -> str:
 
 def render_form(cfg: dict, active: set, message: str = "", error: str = "",
                 file_sig: str = "", file_name: str = "pipeline_config.yaml",
-                read_only: str = "", token: str = "") -> str:
+                read_only: str = "", token: str = "", file_path: str = "") -> str:
     parts = ["""<!doctype html><html><head><meta charset="utf-8">
 <title>Pipeline config editor</title>
 <style>
@@ -356,6 +368,8 @@ section[hidden]{display:none}
 <h1>AreTomo3 / AreTomo2 / IMOD+RAPTOR / IsoNet2 pipeline config</h1>
 <p class="note">Editing this file's fields directly -- comments and structure are preserved. Advanced/commented-out options (predict.model, refine.pretrained_model, the aretomo "extra:" block, etc.) still need a manual edit. Sections for the two engines you didn't pick above are hidden, not deleted -- their values stay in the file untouched.</p>
 """]
+    if file_path:
+        parts.append(f'<p class="note">Editing {html.escape(file_path)}</p>')
     if message:
         parts.append(f'<div class="msg ok">{html.escape(message)}</div>')
     if error:
@@ -407,7 +421,15 @@ section[hidden]{display:none}
                 )
         parts.append("</section>")
     parts.append(f'<button type="submit"{" disabled" if read_only else ""}>'
-                 f'Save to {html.escape(file_name)}</button></form>')
+                 f'Save to {html.escape(file_name)}</button>')
+    if numbered_configs:
+        parts.append('<h2>Save as new numbered config</h2>'
+                     '<div class="field"><label for="_new_name">name (e.g. your dataset)</label>'
+                     '<input type="text" id="_new_name" name="_new_name" placeholder="131_4"></div>'
+                     '<p class="note">Saves the values above as the next free number in '
+                     'configs/, owned by you; run it with ./pipeline run &lt;number&gt;.</p>'
+                     '<button type="submit" formaction="/save_new">Save as new numbered config</button>')
+    parts.append('</form>')
     parts.append("""<script>
 (function(){
   var sel = document.getElementById("engine");
@@ -457,8 +479,13 @@ class StaleFormError(ValueError):
 
 
 def apply_updates(config_path: Path, form: dict) -> None:
+    config_path.write_text(patched_text(config_path, form))
+
+
+def patched_text(config_path: Path, form: dict) -> str:
+    """config_path's text with the form's values on their lines."""
     text = config_path.read_text()
-    # Checked against the same read that gets patched and written below.
+    # Checked against the same read that gets patched (and written) below.
     if form.get("_file_sig", [""])[0] != file_signature(text):
         raise StaleFormError(
             f"{config_path.name} changed after you opened this page (saved from "
@@ -490,7 +517,7 @@ def apply_updates(config_path: Path, form: dict) -> None:
             raise ValueError(f"couldn't parse existing line for '{label}': {lines[line_idx]!r}")
         lines[line_idx] = m.group("prefix") + new_value_text + m.group("suffix")
 
-    config_path.write_text("\n".join(lines))
+    return "\n".join(lines)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -525,7 +552,7 @@ class Handler(BaseHTTPRequestHandler):
         self._send_html(self._form())
 
     def do_POST(self):
-        if self.path != "/save":
+        if self.path not in ("/save", "/save_new"):
             self._send_html("Not found", 404)
             return
         length = int(self.headers.get("Content-Length", 0))
@@ -534,7 +561,25 @@ class Handler(BaseHTTPRequestHandler):
         if not secrets.compare_digest(form.get("_token", [""])[0], self.token):
             self._refuse()
             return
+        new_name = form.get("_new_name", [""])[0].strip()
         try:
+            if self.path == "/save_new":
+                if not numbered_configs:
+                    raise ValueError("numbered configs need numbered_configs.py next to this file")
+                if not new_name:
+                    raise ValueError("type a name for the new config next to its button")
+                number, path = numbered_configs.create(
+                    new_name, patched_text(self.config_path, form),
+                    f"{self.config_path.resolve()} (config editor)")
+                Handler.config_path = path  # this page edits the new config from now on
+                self._send_html(self._form(
+                    message=f"Saved as config {number:03d}: {path}. Check it with ./pipeline run "
+                            f"{number} --dry-run, then run it with ./pipeline run {number}"))
+                return
+            if new_name:
+                # Enter in the name box submits with the first button (Save to <file>)
+                raise ValueError(f"a new config name ({new_name}) is filled in -- to save as a "
+                                 f"new numbered config, click its button")
             apply_updates(self.config_path, form)
             self._send_html(self._form(message=f"Saved to {self.config_path}"))
         except StaleFormError as exc:
@@ -549,7 +594,8 @@ class Handler(BaseHTTPRequestHandler):
         read_only = "" if os.access(self.config_path, os.W_OK) else read_only_message(self.config_path)
         return render_form(yaml.safe_load(text), set(index_paths(text.split("\n"))),
                            file_sig=file_signature(text), file_name=self.config_path.name,
-                           read_only=read_only, token=self.token, **kw)
+                           read_only=read_only, token=self.token,
+                           file_path=str(self.config_path.resolve()), **kw)
 
 
 def parse_ports(spec: str) -> list:

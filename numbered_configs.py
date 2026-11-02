@@ -12,13 +12,15 @@ pipeline's packages (see pipeline.local):
     ./pipeline list                         number, owner, engine, data, who is running it
     ./pipeline new <name> [--from N|FILE]   copy the example (or config N, a config file
                                             or a run log) to the next free number
-    ./pipeline edit N                       open config N in the web form (config_editor.py)
+    ./pipeline edit N                       open config N in the web form (config_editor.py);
+                                            its "Save as new numbered config" also makes a number
     ./pipeline run N [options]              run_pipeline.py on config N, e.g.
                                             ./pipeline run 4 --start-from refine
 
 configs/ is writable by everyone with the sticky bit set (chmod 1777, like
 /tmp): anyone can add a config, but only its owner can change or delete
-it -- copy someone else's with `new --from N` instead. A run holds a lock
+it -- copy someone else's with `new --from N` (or open it with `edit N`,
+which shows it read-only, and save it as a new number). A run holds a lock
 on its config (a file in /tmp, released when the run ends however it ends),
 so one config can't be run twice at the same time.
 """
@@ -120,25 +122,38 @@ def cmd_list(args):
         print("  ".join(cell.ljust(w) for cell, w in zip(row, widths)) + "  " + row[-1])
 
 
-def cmd_new(args):
-    name = re.sub(r"[^A-Za-z0-9_.+-]+", "_", args.name).strip("_")
+def create(name: str, text: str, src) -> tuple:
+    """Write text as configs/NNN_<name>.yaml at the next free number, owned
+    by whoever runs this (`new`, and config_editor.py's "Save as new
+    numbered config"). Returns (number, path)."""
+    name = re.sub(r"[^A-Za-z0-9_.+-]+", "_", name).strip("_")
     if not name:
-        sys.exit("give the config a name, e.g. ./pipeline new UriTomos_raw")
+        raise ValueError("give the config a name, e.g. UriTomos_raw")
+    CONFIG_DIR.mkdir(exist_ok=True)
+    # one at a time, so two people can't get the same number
+    lock = _open_lock(Path("/tmp/cryoet-pipeline-new.lock"))
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        number = max(numbered(), default=0) + 1
+        path = CONFIG_DIR / f"{number:03d}_{name}.yaml"
+        with open(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o664), "w") as fh:
+            fh.write(f"# Config {number:03d} ({name}): made by {getpass.getuser()} on "
+                     f"{time.strftime('%Y-%m-%d %H:%M')} from {src}\n" + text)
+    finally:
+        os.close(lock)
+    return number, path
+
+
+def cmd_new(args):
     src = resolve(args.source) if args.source else HERE / "pipeline_config.example.yaml"
     text = src.read_text()
     if text.startswith("# Pipeline run started"):
         # a run log (pipeline_params_*.txt): the config follows its header
         text = text.split("\n\n", 1)[1]
-    CONFIG_DIR.mkdir(exist_ok=True)
-    # one `new` at a time, so two people can't get the same number
-    lock = _open_lock(Path("/tmp/cryoet-pipeline-new.lock"))
-    fcntl.flock(lock, fcntl.LOCK_EX)
-    number = max(numbered(), default=0) + 1
-    path = CONFIG_DIR / f"{number:03d}_{name}.yaml"
-    with open(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o664), "w") as fh:
-        fh.write(f"# Config {number:03d} ({name}): made by {getpass.getuser()} on "
-                 f"{time.strftime('%Y-%m-%d %H:%M')} from {src.resolve()}\n" + text)
-    os.close(lock)
+    try:
+        number, path = create(args.name, text, src.resolve())
+    except ValueError as exc:
+        sys.exit(str(exc))
     print(f"created {path}\n"
           f"edit it (./pipeline edit {number}, or any text editor), check it with "
           f"./pipeline run {number} --dry-run, then run it with ./pipeline run {number}")
@@ -147,8 +162,9 @@ def cmd_new(args):
 def cmd_edit(args):
     config = resolve(args.config)
     if not os.access(config, os.W_OK):
-        sys.exit(f"{config.name} belongs to {config.owner()} -- copy it to change it: "
-                 f"./pipeline new <name> --from {args.config}")
+        print(f"{config.name} belongs to {config.owner()} -- it opens read-only; put in your "
+              f"own data and click 'Save as new numbered config' to get a number of your own",
+              flush=True)  # execv below drops anything still buffered
     os.execv(sys.executable, [sys.executable, str(HERE / "config_editor.py"),
                               "--config", str(config)] + args.options)
 
