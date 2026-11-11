@@ -31,11 +31,14 @@ Three alignment engines are supported via the `engine` config key:
 ## Installation
 
 ```bash
-git clone /mnt/cryonas02/Users/Gabriel_Frank/Ariel_Cohen/aretomo3-isonet2-pipeline.git
-cd aretomo3-isonet2-pipeline
+git clone https://github.com/ariel234156/TM_pipeline.git
+cd TM_pipeline
 ./install.sh --check     # report what's there and what's missing; changes nothing
 ./install.sh             # install what's missing into ~/cryoet_software
 ```
+
+On the lab machines, cloning the NAS copy is faster than GitHub:
+`git clone /mnt/cryonas02/Users/Gabriel_Frank/Ariel_Cohen/aretomo3-isonet2-pipeline.git TM_pipeline`.
 
 `install.sh` checks each piece of software the pipeline runs and installs
 only what's missing, all into one folder (`--prefix`, default
