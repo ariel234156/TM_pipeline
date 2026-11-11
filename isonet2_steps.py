@@ -38,10 +38,19 @@ def _flag_args(flags: dict) -> list:
     return args
 
 
-def _run(cmd: list, dry_run: bool):
+def _run(cmd: list, dry_run: bool, cwd=None):
     print("+ " + " ".join(cmd))
     if not dry_run:
-        subprocess.run(cmd, check=True, env=_ISONET_ENV)
+        if cwd is not None:
+            Path(cwd).mkdir(parents=True, exist_ok=True)
+        subprocess.run(cmd, check=True, env=_ISONET_ENV, cwd=cwd)
+
+
+def _absolute(value):
+    """A path argument made absolute against the current directory, so it
+    means the same after the command is started in another one. IsoNet2's
+    "None" placeholder is left alone."""
+    return value if value in (None, "None") else os.path.abspath(str(value))
 
 
 def _isonet_prefix(isonet_bin) -> list:
@@ -63,20 +72,32 @@ def prepare_star(pixel_size, defocus=None, even_dir=None, odd_dir=None, full_dir
     split. Exactly one of the two must be given. defocus is optional --
     omit it (leave None) to let isonet.py fall back to its own default
     (e.g. when no per-tomogram CTF info is available, as with AreTomo2's
-    output -- see aretomo2_step.py)."""
+    output -- see aretomo2_step.py).
+
+    isonet.py prepare_star also writes a .to_node.json (a copy of the star
+    table, for its GUI) into the directory it is started from. Started
+    from wherever ./pipeline was run -- usually the pipeline's own folder,
+    which other accounts can't write -- it failed for them after writing
+    the star file. So it runs in the star file's folder, with every path
+    argument made absolute first."""
     if full_dir is not None:
-        cmd = _isonet_prefix(isonet_bin) + ["prepare_star", "--full", str(full_dir)]
+        cmd = _isonet_prefix(isonet_bin) + ["prepare_star", "--full", _absolute(full_dir)]
     elif even_dir is not None and odd_dir is not None:
         cmd = _isonet_prefix(isonet_bin) + [
-            "prepare_star", "--even", str(even_dir), "--odd", str(odd_dir)]
+            "prepare_star", "--even", _absolute(even_dir), "--odd", _absolute(odd_dir)]
     else:
         raise ValueError("prepare_star needs either full_dir, or both even_dir and odd_dir")
+    flags = dict(flags)
+    for key in ("star_name", "mask_folder", "coordinate_folder"):
+        if key in flags:
+            flags[key] = _absolute(flags[key])
+    star = Path(flags.setdefault("star_name", _absolute("tomograms.star")))
     cmd += ["--pixel_size", str(pixel_size)]
     if defocus is not None:
         cmd += ["--defocus", str(defocus)]
     cmd += _flag_args(flags)
-    _run(cmd, dry_run)
-    return Path(flags.get("star_name", "tomograms.star"))
+    _run(cmd, dry_run, cwd=star.parent)
+    return star
 
 
 def deconv(star_file, isonet_bin="isonet.py", dry_run=False, **flags) -> Path:
