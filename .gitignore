@@ -17,3 +17,8 @@ corrected_tomos/
 # real paths of whoever made them.
 configs/*.yaml
 pipeline.local
+pipeline.local.tmp.*
+
+# IsoNet2's prepare_star writes this into the folder it runs in (the
+# pipeline now runs it in the star file's folder; older runs left it here)
+.to_node.json

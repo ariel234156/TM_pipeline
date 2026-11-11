@@ -39,9 +39,19 @@ cd aretomo3-isonet2-pipeline
 
 `install.sh` checks each piece of software the pipeline runs and installs
 only what's missing, all into one folder (`--prefix`, default
-`~/cryoet_software`), without root. A copy counts as present if it is
-already set in your config, on `PATH`, or in the prefix, and it actually
-runs. Re-running is safe.
+`~/cryoet_software`), without root. Re-running is safe.
+
+It first looks for copies that are already there, and uses one only if it
+actually runs (and, for IMOD, is 5.1.13 or newer). It looks in:
+- this machine's `pipeline.local` and the `--config` given
+- `PATH` and the prefix
+- every conda environment (`conda env list` and `~/.conda/environments.txt`)
+- the usual software folders: `/opt`, `/usr/local`, your home, and
+  `/home/*`, where lab machines often keep one folder per program
+  (`/home/AreTomo2/AreTomo2`).
+
+When several IsoNet2 installs share a version number, the one installed
+from the tested commit wins.
 
 | Component | Installed as | Version installed |
 |---|---|---|
@@ -59,22 +69,40 @@ IsoNet2's PyTorch/CUDA environment. Its checks and installs ignore Python
 packages installed with `pip install --user` (`~/.local`), which can
 otherwise break conda environments.
 
-Afterwards it writes the paths into `pipeline_config.yaml`, keeping all
-comments, and creates that file from `pipeline_config.example.yaml` if it
+Afterwards it writes what it found or installed into `pipeline.local`, as
+this machine's block (one per hostname, so several machines can share a
+checkout on a network drive; rerunning replaces only this machine's
+block):
+- the pipeline's Python
+- `PATH` additions for configs that call AreTomo by bare name
+- the software paths, which `./pipeline new` puts into every config it
+  makes
+
+So after `./install.sh`, `./pipeline` works for every account on the
+machine (see "Several users on one machine" below).
+
+With `--config FILE` it also writes the paths into that config, keeping all
+comments, and creates the file from `pipeline_config.example.yaml` if it
 doesn't exist yet. The example has its `imod:` and `pytom:` sections
 commented out; for those, it prints the lines to add instead. It also writes
 two launchers that always use the right Python:
 
 ```bash
-~/cryoet_software/bin/cryoet-pipeline --config pipeline_config.yaml
-~/cryoet_software/bin/cryoet-config-editor --config pipeline_config.yaml
+~/cryoet_software/bin/cryoet-pipeline --config my_config.yaml
+~/cryoet_software/bin/cryoet-config-editor --config my_config.yaml
 ```
 
 Useful options: `--only imod,pytom` or `--skip aretomo2` to limit the
-components, `--config my_config.yaml`, `--cuda /usr/local/cuda-12.4` to
-choose the CUDA toolkit for the AreTomo builds, and `--ignore-existing all`
-for a fully self-contained install that ignores copies found elsewhere.
-Logs go to `~/cryoet_software/logs/`.
+components, `--cuda /usr/local/cuda-12.4` to choose the CUDA toolkit for
+the AreTomo builds, and `--ignore-existing all` for a fully self-contained
+install that ignores copies found elsewhere. Logs go to
+`~/cryoet_software/logs/`.
+
+On a slow or unreliable network, downloads resume where they broke off.
+Git checkouts are partial clones: file contents come only for the commit
+used, and IsoNet2's GUI app, tutorial images and preprint PDF are left out.
+The conda environments (IsoNet2's PyTorch/CUDA one is ~10 GB) still need a
+working connection.
 
 **What it can't install** (ask an administrator): the NVIDIA driver; `git`,
 `make`, and `curl` or `wget`; and, only for building AreTomo3/AreTomo2, a
@@ -183,12 +211,21 @@ run locks its config (a file in `/tmp`), so one config can't run twice at
 once.
 
 `./pipeline` runs with the Python and `PATH` set in `pipeline.local`, next
-to it (machine-specific, not in git):
+to it (machine-specific, not in git, written by `./install.sh`; see
+Installation):
 
 ```bash
 PIPELINE_PYTHON=/path/to/env/bin/python3   # has the packages in requirements.txt
 PATH="$PATH:/opt/AreTomo3"                 # tools the configs call by bare name
+export PIPELINE_IMOD_BIN_DIR=/opt/imod_5.1.13/bin   # and the other software paths
 ```
+
+`./pipeline new` copies those software paths (AreTomo3/AreTomo2 binaries,
+IsoNet2's `[python, isonet.py]`, IMOD's and PyTom's `bin_dir`) into the
+new config, also when it copies a config made on another machine, and
+prints each one it changes. `isonet.py prepare_star` runs in the star
+file's folder (`organize.out_dir`), since it also writes a `.to_node.json`
+where it runs.
 
 ## Files
 

@@ -2,10 +2,12 @@
 # Run the pipeline from any account on this machine, by config number:
 #   ./pipeline list | new <name> [--from N] | edit N | run N [options]
 # (see numbered_configs.py). Machine-specific settings go in pipeline.local
-# next to this script (not in git): which Python has the pipeline's
-# packages, and PATH additions for tools the configs call by bare name, e.g.
+# next to this script (not in git), written by ./install.sh: which Python
+# has the pipeline's packages, PATH additions for tools the configs call by
+# bare name, and the software paths "new" puts into configs, e.g.
 #   PIPELINE_PYTHON=/path/to/env/bin/python3
 #   PATH="$PATH:/opt/AreTomo3"
+#   export PIPELINE_IMOD_BIN_DIR=/opt/imod_5.1.13/bin
 REPO="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 PIPELINE_PYTHON=python3
 if [ -f "$REPO/pipeline.local" ]; then

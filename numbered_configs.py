@@ -154,9 +154,40 @@ def cmd_new(args):
         number, path = create(args.name, text, src.resolve())
     except ValueError as exc:
         sys.exit(str(exc))
-    print(f"created {path}\n"
-          f"edit it (./pipeline edit {number}, or any text editor), check it with "
+    print(f"created {path}")
+    set_machine_tools(path)
+    print(f"edit it (./pipeline edit {number}, or any text editor), check it with "
           f"./pipeline run {number} --dry-run, then run it with ./pipeline run {number}")
+
+
+# Where this machine's software is: set by install.sh in pipeline.local
+# (exported), as config key -> environment variable. Software paths belong
+# to the machine, not the dataset, so a config copied from another machine
+# (or from the example) gets this machine's.
+MACHINE_TOOLS = {"aretomo_bin": "PIPELINE_ARETOMO3_BIN", "aretomo2_bin": "PIPELINE_ARETOMO2_BIN",
+                 "imod.bin_dir": "PIPELINE_IMOD_BIN_DIR", "pytom.bin_dir": "PIPELINE_PYTOM_BIN_DIR"}
+
+
+def set_machine_tools(path: Path):
+    from config_editor import set_values
+    updates = {key: os.environ[var] for key, var in MACHINE_TOOLS.items() if os.environ.get(var)}
+    if os.environ.get("PIPELINE_ISONET_PYTHON") and os.environ.get("PIPELINE_ISONET_SCRIPT"):
+        updates["isonet_bin"] = [os.environ["PIPELINE_ISONET_PYTHON"], os.environ["PIPELINE_ISONET_SCRIPT"]]
+    if not updates:
+        return
+    cfg = yaml.safe_load(path.read_text()) or {}
+
+    def current(key):
+        node = cfg
+        for part in key.split("."):
+            node = node.get(part) if isinstance(node, dict) else None
+        return node
+
+    updates = {k: v for k, v in updates.items() if current(k) != v}
+    missing = set_values(path, updates)
+    for key, value in updates.items():
+        if key not in missing:
+            print(f"  this machine's software (pipeline.local): {key}: {value}")
 
 
 def cmd_edit(args):
