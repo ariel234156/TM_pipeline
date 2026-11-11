@@ -34,15 +34,17 @@ Three alignment engines are supported via the `engine` config key:
 git clone https://github.com/ariel234156/TM_pipeline.git
 cd TM_pipeline
 ./install.sh --check     # report what's there and what's missing; changes nothing
-./install.sh             # install what's missing into ~/cryoet_software
+./install.sh             # asks where to install, then installs what's missing
 ```
 
 On the lab machines, cloning the NAS copy is faster than GitHub:
 `git clone /mnt/cryonas02/Users/Gabriel_Frank/Ariel_Cohen/aretomo3-isonet2-pipeline.git TM_pipeline`.
 
 `install.sh` checks each piece of software the pipeline runs and installs
-only what's missing, all into one folder (`--prefix`, default
-`~/cryoet_software`), without root. Re-running is safe.
+only what's missing, all into one folder, without root. It asks which
+folder (Tab completes paths; Enter takes the default, `~/cryoet_software`),
+unless you give one with `--prefix DIR`. With `--yes` it asks nothing and
+uses `--prefix` or the default. Re-running is safe.
 
 It first looks for copies that are already there, and uses one only if it
 actually runs (and, for IMOD, is 5.1.13 or newer). It looks in:
@@ -88,7 +90,8 @@ With `--config FILE` it also writes the paths into that config, keeping all
 comments, and creates the file from `pipeline_config.example.yaml` if it
 doesn't exist yet. The example has its `imod:` and `pytom:` sections
 commented out; for those, it prints the lines to add instead. It also writes
-two launchers that always use the right Python:
+two launchers that always use the right Python, into the install folder
+(shown here for the default):
 
 ```bash
 ~/cryoet_software/bin/cryoet-pipeline --config my_config.yaml
@@ -98,8 +101,8 @@ two launchers that always use the right Python:
 Useful options: `--only imod,pytom` or `--skip aretomo2` to limit the
 components, `--cuda /usr/local/cuda-12.4` to choose the CUDA toolkit for
 the AreTomo builds, and `--ignore-existing all` for a fully self-contained
-install that ignores copies found elsewhere. Logs go to
-`~/cryoet_software/logs/`.
+install that ignores copies found elsewhere. Logs go to `logs/` in the
+install folder.
 
 On a slow or unreliable network, downloads resume where they broke off.
 Git checkouts are partial clones: file contents come only for the commit

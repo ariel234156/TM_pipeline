@@ -9,9 +9,11 @@
 # A component counts as present if a working copy is found: in this
 # machine's pipeline.local, the --config given, on PATH, in --prefix, in any
 # conda environment, or in the usual software folders (/opt, /usr/local,
-# /home/*). Only missing ones are installed, all into --prefix (no root
-# needed). What it finds or installs is written into pipeline.local (for
-# ./pipeline and the configs it makes) and into --config. Run with --help.
+# /home/*). Only missing ones are installed, all into one folder (no root
+# needed): --prefix, or the one the user types in when asked (run by hand,
+# without --prefix or --yes). What it finds or installs is written into
+# pipeline.local (for ./pipeline and the configs it makes) and into --config.
+# Run with --help.
 set -uo pipefail   # not -e: one component failing must not stop the others
 # Packages from `pip install --user` (~/.local/lib/pythonX.Y) are added to
 # every Python of that version, conda environments included. A stale numpy
@@ -21,6 +23,7 @@ export PYTHONNOUSERSITE=1
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PREFIX="$HOME/cryoet_software"
+PREFIX_GIVEN=0
 CONFIG=""
 MODE=install
 YES=0
@@ -57,7 +60,8 @@ Then writes this machine's block in pipeline.local (Python, PATH and the
 software paths), which ./pipeline uses and copies into the configs that
 "./pipeline new" makes.
 
-  --prefix DIR           where missing software goes (default: \$HOME/cryoet_software)
+  --prefix DIR           where missing software goes; without it you're asked
+                         (default: \$HOME/cryoet_software)
   --config FILE          also write the paths into this config (created from
                          pipeline_config.example.yaml if missing)
   --check                only report what is found or missing; change nothing
@@ -69,7 +73,8 @@ software paths), which ./pipeline uses and copies into the configs that
   --cuda DIR             CUDA toolkit used to build AreTomo3/AreTomo2
                          (default: \$CUDA_HOME, nvcc on PATH, /usr/local/cuda)
   --jobs N               parallel build jobs (default: $JOBS)
-  -y, --yes              don't ask before installing
+  -y, --yes              don't ask anything: --prefix (or the default) is used,
+                         and missing software is installed
   --imod-version V       (default $IMOD_VERSION)
   --isonet2-ref REF      git commit/tag (default $ISONET2_REF)
   --pytom-version V      (default $PYTOM_VERSION)
@@ -85,7 +90,7 @@ EOF
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --prefix) PREFIX="$2"; shift ;;
+        --prefix) PREFIX="$2"; PREFIX_GIVEN=1; shift ;;
         --config) CONFIG="$2"; shift ;;
         --check) MODE=check ;;
         --only) ONLY="$2"; shift ;;
@@ -104,6 +109,33 @@ while [ $# -gt 0 ]; do
     esac
     shift
 done
+
+# The install folder must be one this user can write to: it, or the
+# nearest part of its path that exists, is a writable folder.
+can_write() {
+    local p="$1"
+    while [ ! -e "$p" ]; do p="$(dirname "$p")"; done
+    [ -d "$p" ] && [ -w "$p" ]
+}
+if [ "$MODE" = install ]; then
+    if [ "$PREFIX_GIVEN" = 0 ] && [ "$YES" = 0 ] && [ -t 0 ]; then
+        # run by hand: let the user choose (Tab completes paths)
+        echo "Where should missing software be installed? Press Enter for the default,"
+        echo "or type a folder (it's created if needed). Nothing is installed without asking."
+        while :; do
+            read -e -r -p "Install folder [$PREFIX]: " answer || { echo; exit 1; }
+            answer="${answer:-$PREFIX}"
+            [[ "$answer" == "~" || "$answer" == "~/"* ]] && answer="$HOME${answer:1}"
+            answer="$(realpath -m -- "$answer")"
+            can_write "$answer" && { PREFIX="$answer"; break; }
+            echo "   you can't write to $answer -- choose a folder of your own (e.g. under $HOME)"
+        done
+        echo
+    elif ! can_write "$(realpath -m -- "$PREFIX")"; then
+        echo "can't write to $PREFIX -- choose another folder with --prefix DIR" >&2
+        exit 2
+    fi
+fi
 PREFIX="$(realpath -m "$PREFIX")"   # resolved like the paths it is compared with
 LOGDIR="$PREFIX/logs"
 HOST="$(hostname -s)"
