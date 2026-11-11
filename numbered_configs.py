@@ -129,7 +129,11 @@ def create(name: str, text: str, src) -> tuple:
     name = re.sub(r"[^A-Za-z0-9_.+-]+", "_", name).strip("_")
     if not name:
         raise ValueError("give the config a name, e.g. UriTomos_raw")
-    CONFIG_DIR.mkdir(exist_ok=True)
+    if not CONFIG_DIR.exists():
+        # not in git (its configs aren't), so a fresh checkout makes it
+        # here: writable by everyone, sticky like /tmp (module docstring)
+        CONFIG_DIR.mkdir()
+        CONFIG_DIR.chmod(0o1777)
     # one at a time, so two people can't get the same number
     lock = _open_lock(Path("/tmp/cryoet-pipeline-new.lock"))
     try:
