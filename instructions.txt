@@ -113,10 +113,17 @@ or in a web form:
    PyTom        reference_map, reference_map_voxel_size_angstrom (the map's
                 own pixel size), particle_diameter_angstrom, and
                 voxel_size_angstrom = pix_size x at_bin (1.51 x 8 = 12.08).
-                No template matching: delete the pytom: section.
+                No template matching: delete the pytom: section, or put
+                "# " back in front of its lines.
    Other        engine: imod_raptor uses the imod: section instead of
    engines      aretomo: (in_dir, gain, out_dir, voltage, bin_factor);
                 engine: aretomo2 uses the aretomo2: section.
+
+Sections that are off: in a config made from the example, the pytom:,
+imod: and relion5_star: sections are commented out. To turn one on, open
+the config in a text editor and remove the "# " (the # and one space) at
+the start of each of its lines. The web form shows its fields after that
+(reload the page).
 
 
 5. CHECKING IT: THE DRY RUN

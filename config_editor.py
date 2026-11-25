@@ -383,6 +383,14 @@ section[hidden]{display:none}
     for section_title, fields, engine_filter in SECTIONS:
         attr = f' data-engine="{html.escape(engine_filter)}"' if engine_filter else ""
         parts.append(f"<section{attr}><h2>{html.escape(section_title)}</h2>")
+        if not any(field[0] in active for field in fields):
+            # e.g. the pytom:/imod: sections, commented out in the example:
+            # say how to turn it on, not just grey out every field
+            where = html.escape(file_path or file_name)
+            parts.append(f'<p class="note">This section is commented out in the config file, '
+                         f'so it is off. To use it: open {where} in a text editor, remove '
+                         f'the "# " (# and one space) at the start of the section\'s lines, '
+                         f'save, and reload this page.</p>')
         for field in fields:
             path, label, kind = field[0], field[1], field[2]
             value = get_by_path(cfg, path)
@@ -436,12 +444,16 @@ section[hidden]{display:none}
                      'open it from the pipeline folder instead: ./pipeline edit N, or '
                      './pipeline edit /path/to/this.yaml</p>')
     parts.append('</form>')
+    # Without an engine: line run_pipeline.py uses aretomo3, so show its
+    # sections then -- the field is a disabled text box with no value, and
+    # going by its value hid every engine's sections (all but IsoNet2 left).
+    default_engine = json.dumps(str((cfg or {}).get("engine") or "aretomo3"))
     parts.append("""<script>
 (function(){
   var sel = document.getElementById("engine");
   if (!sel) return;
   function apply(){
-    var chosen = sel.value;
+    var chosen = sel.tagName === "SELECT" ? sel.value : """ + default_engine + """;
     document.querySelectorAll("section[data-engine]").forEach(function(s){
       s.hidden = s.getAttribute("data-engine") !== chosen;
     });

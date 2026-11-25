@@ -22,7 +22,7 @@
 #      EER frames + .mdoc (motion-corrected by IMOD's own alignframes) or
 #      pre-assembled .st/.mrc stacks, via imod.input_mode. Like aretomo2,
 #      no even/odd split -> isonet2's single-tomogram method.
-# engine: aretomo3
+engine: aretomo3
 
 aretomo_bin: AreTomo3      # path to the AreTomo3 binary, if not on PATH
 aretomo2_bin: AreTomo2     # path to the AreTomo2 binary, if not on PATH (only used when engine: aretomo2)
