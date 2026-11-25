@@ -1,12 +1,14 @@
 CRYO-ET PIPELINE ON MORITZ - QUICK START
 ========================================
 AreTomo3 (or IMOD/RAPTOR) -> IsoNet2 -> PyTom template matching,
-driven by one config file. Everything is installed; no conda needed.
+driven by one config file. Everything is installed already: don't run
+install.sh or conda, just follow the steps below.
 Questions: Ariel Cohen (coari).
 
 1. Make your own config (always copy config 3)
    cd /mnt/cryonas02/Users/Gabriel_Frank/Ariel_Cohen/aretomo3-isonet2-pipeline
    ./pipeline new MyDataset --from 3      -> prints your number, e.g. 007
+   (it also sets this machine's software paths -- leave those as they are)
 
 2. Edit it:  nano configs/007_MyDataset.yaml   (or: ./pipeline edit 7)
    - Data:     aretomo.in_prefix, aretomo.gain, aretomo.defect_file
@@ -40,10 +42,16 @@ Questions: Ariel Cohen (coari).
 
 Common problems
    "already running"     -> someone runs that config; use your own
-   "Permission denied"   -> an output folder is still someone else's
+   "Permission denied"   -> an output folder is still someone else's;
+                            on /tmp/cryoet-pipeline-new.lock: your copy is
+                            older than 2026-11-25, run git pull
    voxel size mismatch   -> set pytom.voxel_size_angstrom to the value shown
    /mnt/cryonas101       -> not mounted on moritz
-   IMOD                  -> keep imod.bin_dir "/home/coari/imod_5.1.13/bin"
-                            (/usr/local/IMOD is 5.1.2 and breaks RAPTOR)
+   IMOD                  -> imod.bin_dir must be IMOD 5.1.13 (set by step 1);
+                            /usr/local/IMOD is 5.1.2 and breaks RAPTOR
+
+Own copy, or another machine:
+   git clone https://github.com/ariel234156/TM_pipeline.git
+   cd TM_pipeline && ./install.sh        (asks where to install)
 
 Full details: README.md and the comments in your config.
