@@ -28,6 +28,7 @@ import argparse
 import fcntl
 import getpass
 import hashlib
+import json
 import os
 import re
 import subprocess
@@ -206,6 +207,39 @@ def set_machine_tools(path: Path):
     for key, value in updates.items():
         if key not in missing:
             print(f"  this machine's software (pipeline.local): {key}: {value}")
+        elif _fill_commented(path, key, value):
+            section = key.rpartition(".")[0]
+            print(f"  this machine's software (pipeline.local): {key}: {value}  "
+                  f"(in the commented-out {section}: section, for when you turn it on)")
+        else:
+            print(f"  this machine's software (pipeline.local): {key}: {value}  "
+                  f"(not in this config -- use it if you add that setting)")
+
+
+def _fill_commented(path: Path, key: str, value) -> bool:
+    """Put value on key's commented-out line, e.g. "#   bin_dir: ..." under
+    the example's "# pytom:", so that uncommenting the section gives this
+    machine's path instead of a placeholder or another machine's path.
+    False if the config has no such line."""
+    section, _, name = key.rpartition(".")
+    if not section:
+        return False
+    lines = path.read_text().split("\n")
+    head = re.compile(rf"^#\s*{re.escape(section)}:\s*$")
+    child = re.compile(r"^#\s{2,}\S")              # the section's commented-out keys
+    item = re.compile(rf"^(#\s{{2,}}{re.escape(name)}:\s*)(\S+)(.*)$")
+    for i, line in enumerate(lines):
+        if not head.match(line):
+            continue
+        for j in range(i + 1, len(lines)):
+            if not child.match(lines[j]):
+                break
+            m = item.match(lines[j])
+            if m:
+                lines[j] = m.group(1) + json.dumps(value) + m.group(3)
+                path.write_text("\n".join(lines))
+                return True
+    return False
 
 
 def cmd_edit(args):

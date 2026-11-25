@@ -178,7 +178,7 @@ aretomo:
 # that one tilt series.
 # ---------------------------------------------------------------------------
 # imod:
-#   bin_dir: /usr/local/imod_5.1.0/bin  # if you hit the crash above, try a newer IMOD install instead (see IMOD_DIR note above)
+#   bin_dir: /path/to/imod_5.1.13/bin  # IMOD 5.1.13 or newer (older tiltalign crashes, see above); ./pipeline new fills in this machine's
 #   input_mode: eer         # eer (raw frames + .mdoc, via alignframes) | mrc (pre-assembled .st/.mrc)
 #   in_dir: /path/to/eer_frames_or_mrc_stacks/
 #   in_suffix: .mdoc        # input_mode: eer only
@@ -460,7 +460,7 @@ isonet:
 # name (longest substring match) before merging.
 # ---------------------------------------------------------------------------
 # pytom:
-#   bin_dir: /home/coari/.conda/envs/pytom_tm/bin
+#   bin_dir: /path/to/pytom_env/bin   # ./pipeline new fills in this machine's
 #   relion5_tomograms_star: /path/to/Relion_files/tomograms.star   # see GOTCHA above -- omit to skip the rlnTomoName remap
 #   reference_map: /path/to/reference.mrc
 #   reference_map_voxel_size_angstrom: 0.305   # the reference map's OWN native pixel size -- see GOTCHA above

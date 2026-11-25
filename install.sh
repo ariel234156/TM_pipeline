@@ -173,10 +173,13 @@ resolve() {  # command name or path -> absolute path of an executable
     [ -x "$p" ] && [ ! -d "$p" ] && readlink -f "$p"
 }
 run_log() {  # run_log <component> <command...>: append output to the component's log
+    # Input from /dev/null: the output goes only to the log, so a question
+    # from an installer would never be seen -- it would just look stuck --
+    # and it must not take answers typed for install.sh's own questions.
     local log="$LOGDIR/$1.log"; shift
     mkdir -p "$LOGDIR"
     printf '\n+ %s\n' "$*" >> "$log"
-    "$@" >> "$log" 2>&1
+    "$@" < /dev/null >> "$log" 2>&1
 }
 fail_tail() { REASON="$1 (last lines of $LOGDIR/$2.log below)"; tail -n 15 "$LOGDIR/$2.log" | sed 's/^/    | /' >&2; }
 size_of() { stat -c %s "$1" 2>/dev/null || echo 0; }
@@ -294,8 +297,17 @@ ensure_conda() {
 
 # ---------------------------------------------------------------- pipeline python
 PY_DEPS="import yaml, numpy, mrcfile, starfile, matplotlib, tifffile"
+# ... and reading a .star file works: starfile 0.5.2 (conda-forge's newest)
+# with pandas 3 imports fine but fails on every read (delim_whitespace)
+PY_STAR_TEST='
+import os, tempfile
+with tempfile.TemporaryDirectory() as d:
+    p = os.path.join(d, "t.star")
+    with open(p, "w") as f:
+        f.write("data_t\n\nloop_\n_rlnTomoName #1\n_rlnVoltage #2\nTS_01 300\n")
+    assert starfile.read(p)["rlnVoltage"][0] == 300'
 PIPELINE_PY=""
-pipeline_ok() { [ -x "$1" ] && "$1" -c "$PY_DEPS" >/dev/null 2>&1; }
+pipeline_ok() { [ -x "$1" ] && "$1" -c "$PY_DEPS$PY_STAR_TEST" >/dev/null 2>&1; }
 check_pipeline() {
     local c
     env_bins
@@ -309,13 +321,15 @@ check_pipeline() {
         esac
         return 0
     done
-    REASON="no python3 with: ${PY_DEPS#import }"
+    REASON="no python3 with: ${PY_DEPS#import } (that can read a .star file)"
     return 1
 }
 install_pipeline() {
     ensure_conda || return 1
+    # pandas<3: conda-forge's newest starfile (0.5.2) passes read_csv() an
+    # option pandas 3 removed, so with pandas 3 no .star file could be read
     run_log pipeline "$CONDA" create -y -p "$PREFIX/envs/cryoet_pipeline" --override-channels -c conda-forge \
-        python=3.11 pyyaml numpy mrcfile starfile matplotlib tifffile ||
+        python=3.11 pyyaml numpy 'pandas<3' mrcfile starfile matplotlib tifffile ||
         { fail_tail "conda create failed" pipeline; return 1; }
 }
 
@@ -364,7 +378,8 @@ check_imod() {
     for b in "$CFG_IMOD_BIN" "${PIPELINE_IMOD_BIN_DIR:-}" "${IMOD_DIR:+$IMOD_DIR/bin}" \
              "$(dirname "$(command -v RAPTOR 2>/dev/null || echo /none/x)")" "$PREFIX/imod_$IMOD_VERSION/bin" \
              "${found[@]}"; do
-        usable imod "$b" || continue
+        # places that don't exist (e.g. --prefix before installing) aren't a reason
+        [ -d "$b" ] && usable imod "$b" || continue
         if imod_ok "$b"; then
             WHERE[imod]="$b"
             [ "$b" = "$CFG_IMOD_BIN" ] || SET_IMOD_BIN_DIR="$b"
@@ -377,7 +392,10 @@ check_imod() {
 }
 install_imod() {
     local f="imod_${IMOD_VERSION}_RHEL8-64_CUDA12.0.sh"
-    download "$IMOD_URL/$f" "$PREFIX/downloads/$f" || { REASON="download of $IMOD_URL/$f failed"; return 1; }
+    # bio3d.colorado.edu is the only source, and it's sometimes down (it
+    # refused all connections on 2026-11-25): a copy put in downloads/ is used
+    download "$IMOD_URL/$f" "$PREFIX/downloads/$f" ||
+        { REASON="couldn't download $IMOD_URL/$f -- get that file another way (e.g. a colleague's copy), put it in $PREFIX/downloads/ and run install.sh again"; return 1; }
     # -name replaces only a previous copy of this same version in --prefix;
     # -skip leaves /etc/profile.d alone (the pipeline sets IMOD_DIR itself).
     run_log imod bash "$PREFIX/downloads/$f" -dir "$PREFIX" -name "imod_$IMOD_VERSION" -skip -yes ||
@@ -474,17 +492,21 @@ pytom_ok() {  # pytom_ok <bin dir>
     [[ "$v" == "${PYTOM_VERSION%.*}".* ]] || NOTE[pytom]+=" (tested with $PYTOM_VERSION)"
 }
 check_pytom() {
-    local b envs=()
+    local b first="" envs=()
     env_bins
     for b in "${ENV_BINS[@]}"; do [ -f "$b/pytom_match_template.py" ] && envs+=("$b"); done
     for b in "$CFG_PYTOM_BIN" "${PIPELINE_PYTOM_BIN_DIR:-}" \
              "$(dirname "$(command -v pytom_match_template.py 2>/dev/null || echo /none/x)")" \
              "$PREFIX/envs/pytom_tm/bin" "${envs[@]}"; do
-        [ -n "$b" ] && usable pytom "$b" && pytom_ok "$b" || continue
-        WHERE[pytom]="$b"
-        [ "$b" = "$CFG_PYTOM_BIN" ] || SET_PYTOM_BIN_DIR="$b"
-        return 0
+        [ -n "$b" ] && [ -d "$b" ] && usable pytom "$b" || continue
+        if pytom_ok "$b"; then
+            WHERE[pytom]="$b"
+            [ "$b" = "$CFG_PYTOM_BIN" ] || SET_PYTOM_BIN_DIR="$b"
+            return 0
+        fi
+        first="${first:-$REASON}"
     done
+    REASON="${first:-no PyTom (pytom_match_template.py) found}"
     return 1
 }
 install_pytom() {
@@ -508,16 +530,20 @@ aretomo_ok() {  # aretomo_ok <binary>
     timeout 60 "$1" --help >/dev/null 2>&1 || { REASON="$1 --help failed"; return 1; }
 }
 check_aretomo() {  # check_aretomo <component> <config value> <binary name> <pipeline.local value>
-    local p found
+    local p found first=""
     mapfile -t found < <(search "$3" "[Aa]re[Tt]omo*/$3" "[Aa]re[Tt]omo*/bin/$3")
     for p in "$(resolve "$2")" "$(resolve "$4")" "$(resolve "$3")" "$PREFIX/$3/$3" "${found[@]}"; do
-        usable "$1" "$p" && aretomo_ok "$p" || continue
-        WHERE[$1]="$p"
-        if [ "$p" != "$(resolve "$2")" ]; then
-            if [ "$1" = aretomo3 ]; then SET_ARETOMO_BIN="$p"; else SET_ARETOMO2_BIN="$p"; fi
+        [ -e "$p" ] && usable "$1" "$p" || continue
+        if aretomo_ok "$p"; then
+            WHERE[$1]="$p"
+            if [ "$p" != "$(resolve "$2")" ]; then
+                if [ "$1" = aretomo3 ]; then SET_ARETOMO_BIN="$p"; else SET_ARETOMO2_BIN="$p"; fi
+            fi
+            return 0
         fi
-        return 0
+        first="${first:-$REASON}"
     done
+    REASON="${first:-no $3 found}"
     return 1
 }
 find_cuda() {

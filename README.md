@@ -105,7 +105,10 @@ On a slow or unreliable network, downloads resume where they broke off.
 Git checkouts are partial clones: file contents come only for the commit
 used, and IsoNet2's GUI app, tutorial images and preprint PDF are left out.
 The conda environments (IsoNet2's PyTorch/CUDA one is ~10 GB) still need a
-working connection.
+working connection. If a download can't be done at all (IMOD's only server,
+bio3d.colorado.edu, is sometimes down), get the file another way, e.g. a
+colleague's copy, put it in `downloads/` in the install folder and run
+`./install.sh` again: it uses a file that's already there.
 
 **What it can't install** (ask an administrator): the NVIDIA driver; `git`,
 `make`, and `curl` or `wget`; and, only for building AreTomo3/AreTomo2, a
