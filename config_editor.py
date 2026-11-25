@@ -34,8 +34,8 @@ file with a YAML dumper, so every comment (including the AreTomo3-segfault
 and epochs/save_interval gotcha notes) survives untouched.
 
 Scope: only fields already active (uncommented) in the YAML are editable
-here. A listed field that is commented out or absent (e.g. the whole PyTom
-section in a config freshly copied from pipeline_config.example.yaml) is
+here. A listed field that is commented out or absent (e.g. a PyTom section
+someone commented out to skip template matching) is
 shown greyed out and left alone on save -- uncomment it in the YAML to edit
 it here. Advanced options not listed at all (predict.model,
 refine.pretrained_model, organize.pixel_size override,
@@ -384,7 +384,7 @@ section[hidden]{display:none}
         attr = f' data-engine="{html.escape(engine_filter)}"' if engine_filter else ""
         parts.append(f"<section{attr}><h2>{html.escape(section_title)}</h2>")
         if not any(field[0] in active for field in fields):
-            # e.g. the pytom:/imod: sections, commented out in the example:
+            # e.g. a pytom: section commented out to skip template matching:
             # say how to turn it on, not just grey out every field
             where = html.escape(file_path or file_name)
             parts.append(f'<p class="note">This section is commented out in the config file, '

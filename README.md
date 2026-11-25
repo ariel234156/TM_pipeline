@@ -89,8 +89,8 @@ machine (see "Several users on one machine" below).
 
 With `--config FILE` it also writes the paths into that config, keeping all
 comments, and creates the file from `pipeline_config.example.yaml` if it
-doesn't exist yet. The example has its `imod:` and `pytom:` sections
-commented out; for those, it prints the lines to add instead. It also writes
+doesn't exist yet. If a section is commented out in that config, it prints
+the lines to add instead. It also writes
 two launchers that always use the right Python, into the install folder
 (shown here for the default):
 

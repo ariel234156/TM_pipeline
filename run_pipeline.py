@@ -769,7 +769,7 @@ def main():
         ap.error(f"isonet.make_mask.mode must be one of {', '.join(MASK_PRESETS)}, not {mask_mode!r}")
     log_run_params(cfg, args.config, args.dry_run)
     skip_denoise = args.skip_denoise or bool(cfg.get("skip_denoise", False))
-    # template matching is optional: the example config has pytom: commented out
+    # template matching is optional: it runs only when there's a pytom: section
     has_pytom = bool(cfg.get("pytom"))
 
     def active(stage):

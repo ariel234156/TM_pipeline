@@ -119,11 +119,12 @@ or in a web form:
    engines      aretomo: (in_dir, gain, out_dir, voltage, bin_factor);
                 engine: aretomo2 uses the aretomo2: section.
 
-Sections that are off: in a config made from the example, the pytom:,
-imod: and relion5_star: sections are commented out. To turn one on, open
-the config in a text editor and remove the "# " (the # and one space) at
-the start of each of its lines. The web form shows its fields after that
-(reload the page).
+A new config has every section on, with the settings of the ferritin test
+data set (config 3 on moritz). Template matching runs whenever the pytom:
+section is there. A section that is commented out (its lines start with
+"# ") is off and shown greyed out in the web form; to turn it on, remove
+the "# " (the # and one space) at the start of each of its lines in a
+text editor, then reload the page.
 
 
 5. CHECKING IT: THE DRY RUN

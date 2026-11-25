@@ -50,7 +50,7 @@ isonet_bin: isonet.py
 # config (and its command line) here as pipeline_params_<date>_<time>.txt.
 # Separate from aretomo.log_dir (AreTomo3's own -LogDir), which is used
 # instead when this line is missing.
-log_dir: /mnt/cryonas02/Users/Gabriel_Frank/Ariel_Cohen/test_ferr/aretomo3_out_bin8
+log_dir: "/mnt/cryonas02/Users/Gabriel_Frank/Ariel_Cohen/test_ferr/Pipeline/log"
 
 # ---------------------------------------------------------------------------
 # Stage 1: AreTomo3 -- motion correction, CTF, alignment, WBP reconstruction.
@@ -61,24 +61,24 @@ aretomo:
   in_prefix: /mnt/cryonas02/Users/Gabriel_Frank/Ariel_Cohen/test_ferr/frames/
   in_suffix: .mdoc
   in_skips: override
-  out_dir: /mnt/cryonas02/Users/Gabriel_Frank/Ariel_Cohen/test_ferr/aretomo3_out_bin8
-  tmp_dir: /mnt/cryonas02/Users/Gabriel_Frank/Ariel_Cohen/test_ferr/aretomo3_out_bin8
-  log_dir: /mnt/cryonas02/Users/Gabriel_Frank/Ariel_Cohen/test_ferr/aretomo3_out_bin8
+  out_dir: "/mnt/cryonas02/Users/Gabriel_Frank/Ariel_Cohen/test_ferr/Pipeline"
+  tmp_dir: "/mnt/cryonas02/Users/Gabriel_Frank/Ariel_Cohen/test_ferr/Pipeline/tmp"
+  log_dir: "/mnt/cryonas02/Users/Gabriel_Frank/Ariel_Cohen/test_ferr/Pipeline/log"
   gain: /mnt/cryonas02/Users/Gabriel_Frank/Ariel_Cohen/test_ferr/20240826_170013_EER_GainReference.gain
   # Camera defects masked before motion correction -- must match the gain
   # reference above; regenerate for any other one:
   #   python3 find_gain_defects.py <gain> <out.txt>
   # (this gain marks a dead column, x = 1048, with values up to ~3800 that
   # AreTomo3 multiplies in as a bright line in every tilt -- see README)
-  defect_file: /mnt/cryonas02/Users/Gabriel_Frank/Ariel_Cohen/test_ferr/camera_defects_20240826.txt
+  defect_file: ""
   pix_size: 1.51
   kv: 200
   cs: 2.70
-  amp_contrast: 0.07      # AreTomo3 default: 0.07
+  amp_contrast: 0.1      # AreTomo3 default: 0.07
   # Motion correction: see aretomo_step.py -- flags/defaults checked against
   # AreTomo3 2.3.1's own source (its --help text is not reliable).
   fm_dose: 0               # 0 = use each tilt's ExposureDose from the .mdoc (recommended). For EER, AreTomo3 sets tilt dose = FmDose x number of RAW EER frames, so only enter the dose per raw frame here, never per tilt
-  fm_int: 10               # raw EER frames per rendered fraction (AreTomo3 default, ~0.15 e/A2 per fraction at typical tomography dose). 0 = let AreTomo3 choose ~0.15 e/A2 per fraction from the dose
+  fm_int: 0               # raw EER frames per rendered fraction (AreTomo3 default, ~0.15 e/A2 per fraction at typical tomography dose). 0 = let AreTomo3 choose ~0.15 e/A2 per fraction from the dose
   eer_sampling: 1          # 2 (+ mc_bin 2) renders 2x super-resolution and Fourier-bins back to the same pixel -- ~4x compute, gain only near Nyquist; not worth it for binned tomograms
   mc_bin: 1                # pair with eer_sampling (2 only if eer_sampling is 2)
   group: [1, 4]            # frames summed before measuring motion: 1st = whole-frame alignment, 2nd = patch alignment (unused while mc_patch is [1, 1])
@@ -94,10 +94,10 @@ aretomo:
   # per series (+ 180 deg handedness check from CTF). Once measured (ROT
   # column of the .aln), lock it for the batch: [<angle>, -1]. This
   # dataset: [179.2, -1].
-  tilt_axis: [0, 1]
+  tilt_axis: [179.2, -1]
   tilt_cor: 1
   align_z: 0              # Z height used during alignment; 0 = the thickness AreTomo3 measures per series (recommended -- one fixed value is unsuitable for a batch)
-  vol_z: 2096             # reconstructed Z height. -1 = measured thickness + ext_z (300)
+  vol_z: 2048             # reconstructed Z height. -1 = measured thickness + ext_z (300)
   at_bin: [8, 8]          # first value is the "primary" bin used below
   wbp: 1
   corr_ctf: 1
@@ -120,25 +120,25 @@ aretomo:
 # path, so isonet.prepare_star.defocus is left for isonet.py's own
 # default unless you set it explicitly.
 # ---------------------------------------------------------------------------
-# aretomo2:
-#   in_dir: /path/to/already_assembled_tilt_series/
-#   out_dir: /path/to/aretomo2_out
-#   out_suffix: _AreTomo    # output filenames: <input_stem><out_suffix>.mrc
-#   skip_existing: true     # skip a file if its output already exists (AreTomo2 has no built-in -Resume)
-#   pix_size: 1.51
-#   kv: 300
-#   cs: 2.70
-#   amp_contrast: 0.07
-#   tilt_range: [-60, 60]   # omit to use the MRC header's own tilt range
-#   tilt_axis: [0, -1]      # [angle, -1] = use as-is; [angle, 1] = refine within +/-3 degrees (see AreTomo3 manual's -TiltAxis section, same semantics)
-#   align_z: 600
-#   vol_z: 1200
-#   out_bin: 4
-#   wbp: 1
-#   patch: [4, 4]           # AreTomo2's single local-alignment patch flag (no separate motion-correction stage to apply McPatch to)
-#   gpu: [0]
-#   # extra:                # pass-through for any AreTomo2 flag not listed above
-#   #   "-CropVol": 4096 4096
+aretomo2:
+  in_dir: "/mnt/cryonas101/_Active/xiaokang/MJ_BN_MJBS/170826/169_3/169_3_20260818_223433/"
+  out_dir: "/mnt/cryonas101/_Active/xiaokang/MJ_BN_MJBS/170826/169_3/Ariel_pipline"
+  out_suffix: _AreTomo    # output filenames: <input_stem><out_suffix>.mrc
+  skip_existing: true     # skip a file if its output already exists (AreTomo2 has no built-in -Resume)
+  pix_size: 1.51
+  kv: 200
+  cs: 2.70
+  amp_contrast: 0.1
+  tilt_range: [-60, 60]   # omit to use the MRC header's own tilt range
+  tilt_axis: [-92.67, -1]      # [angle, -1] = use as-is; [angle, 1] = refine within +/-3 degrees (see AreTomo3 manual's -TiltAxis section, same semantics)
+  align_z: 1200
+  vol_z: 2048
+  out_bin: 4
+  wbp: 1
+  patch: [4, 4]           # AreTomo2's single local-alignment patch flag (no separate motion-correction stage to apply McPatch to)
+  gpu: [0, 1, 2, 3]
+  # extra:                # pass-through for any AreTomo2 flag not listed above
+  #   "-CropVol": 4096 4096
 
 # ---------------------------------------------------------------------------
 # Stage 1 ALTERNATIVE: IMOD + RAPTOR fiducial-based alignment (imod_step.py)
@@ -177,52 +177,52 @@ aretomo:
 # missing .xf, just re-run run_pipeline.py --start-from imod_align for
 # that one tilt series.
 # ---------------------------------------------------------------------------
-# imod:
-#   bin_dir: /path/to/imod_5.1.13/bin  # IMOD 5.1.13 or newer (older tiltalign crashes, see above); ./pipeline new fills in this machine's
-#   input_mode: eer         # eer (raw frames + .mdoc, via alignframes) | mrc (pre-assembled .st/.mrc)
-#   in_dir: /path/to/eer_frames_or_mrc_stacks/
-#   in_suffix: .mdoc        # input_mode: eer only
-#   gain: /path/to/gain_reference.gain   # input_mode: eer only
-#   out_dir: /path/to/imod_raptor_out
-#   voltage: 300             # must be 200 or 300 (alignframes requirement)
-#   pixel_size_angstrom: 1.51
-#   bin_factor: 8            # pre-binning before RAPTOR (RAPTOR itself gets -bin 1 -- see imod_step.py)
-#   thickness_px: 512
-#   gold_diameter_nm: 10
-#   out_suffix: _final      # final tomogram filename: <base><out_suffix>.mrc (what organize/relion5_star look for)
-#   feed_variant: wbp        # which reconstruction type becomes <base>_final.mrc: wbp | fake_sirt | filtered
-#   xray_removal:
-#     enabled: true          # ccderaser -find before binning (hot pixels / X-ray strikes)
-#   erase_gold:
-#     # When enabled, EVERY tilt series gets reconstructed BOTH ways: with
-#     # gold (<base>_bin8.mrc, from the raw RAPTOR-aligned stack) and
-#     # without gold (<base>_bin8_noGold.mrc, from the gold-erased stack) --
-#     # both sets of files (plus FakeSIRT/filtered variants if configured)
-#     # always exist on disk. The <base>_final.mrc symlink (what organize/
-#     # relion5_star/downstream IsoNet2 use) is built from the NO-GOLD
-#     # reconstruction specifically -- downstream processing continues on
-#     # the gold-erased tomogram.
-#     # How: the beads RAPTOR tracked + every bead imodfindbeads finds are
-#     # erased on the RAW binned stack (where those coordinates are valid),
-#     # then that stack is aligned with the same .xf as the with-gold one
-#     # (see imod_step.erase_gold's docstring). To regenerate existing
-#     # no-gold stacks, move <base>_bin8_noGold.ali aside and re-run
-#     # imod_align -- it erases from the files on disk without re-running
-#     # RAPTOR, then re-run imod_reconstruct.
-#     enabled: false
-#     find_untracked: true   # also erase beads RAPTOR didn't track (imodfindbeads); false = RAPTOR's beads only
-#     better_radius_px: null # erase radius (px); null = round(0.75 * gold diameter px) -- covers core + Fresnel fringe
-#   raptor:
-#     markers_per_image: null  # null = let RAPTOR auto-estimate (recommended to start)
-#     xray: false            # RAPTOR's own -xray: strip strong line features before marker detection
-#   reconstruction:
-#     fake_sirt_iterations: 10  # omit/0 to skip this extra reconstruction variant entirely
-#   filtered_reconstruction:
-#     enabled: false          # mtffilter low/high-pass contrast filter + a second reconstruction
-#     low_pass: [0.2, 0.05]   # [radius, sigma], fraction of Nyquist
-#     high_pass: 0.0
-#   # align_frames:           # pass-through for any extra alignframes flag (input_mode: eer only)
-#   #   dtype: 4              # e.g. dose-weighting from the .mdoc (-dtype 4 -dfile <mdoc>)
+imod:
+  bin_dir: /path/to/imod_5.1.13/bin  # IMOD 5.1.13 or newer (older tiltalign crashes, see above); ./pipeline new fills in this machine's
+  input_mode: "mrc"         # eer (raw frames + .mdoc, via alignframes) | mrc (pre-assembled .st/.mrc)
+  in_dir: "/mnt/cryonas02/Users/Gabriel_Frank/Ariel_Cohen/test_ferr/Ferritin_With_Gold/"
+  in_suffix: .mdoc        # input_mode: eer only
+  gain: "/mnt/cryonas101/_Active/xiaokang/MJ_BN_MJBS/170826/20260817_104212_EER_GainReference.gain"   # input_mode: eer only
+  out_dir: "/mnt/cryonas02/Users/Gabriel_Frank/Ariel_Cohen/test_ferr/Ferritin_With_Gold/IMOD"
+  voltage: 200             # must be 200 or 300 (alignframes requirement)
+  pixel_size_angstrom: 1.14
+  bin_factor: 8            # pre-binning before RAPTOR (RAPTOR itself gets -bin 1 -- see imod_step.py)
+  thickness_px: 512
+  gold_diameter_nm: 10
+  out_suffix: _final      # final tomogram filename: <base><out_suffix>.mrc (what organize/relion5_star look for)
+  feed_variant: wbp        # which reconstruction type becomes <base>_final.mrc: wbp | fake_sirt | filtered
+  xray_removal:
+    enabled: true          # ccderaser -find before binning (hot pixels / X-ray strikes)
+  erase_gold:
+    # When enabled, EVERY tilt series gets reconstructed BOTH ways: with
+    # gold (<base>_bin8.mrc, from the raw RAPTOR-aligned stack) and
+    # without gold (<base>_bin8_noGold.mrc, from the gold-erased stack) --
+    # both sets of files (plus FakeSIRT/filtered variants if configured)
+    # always exist on disk. The <base>_final.mrc symlink (what organize/
+    # relion5_star/downstream IsoNet2 use) is built from the NO-GOLD
+    # reconstruction specifically -- downstream processing continues on
+    # the gold-erased tomogram.
+    # How: the beads RAPTOR tracked + every bead imodfindbeads finds are
+    # erased on the RAW binned stack (where those coordinates are valid),
+    # then that stack is aligned with the same .xf as the with-gold one
+    # (see imod_step.erase_gold's docstring). To regenerate existing
+    # no-gold stacks, move <base>_bin8_noGold.ali aside and re-run
+    # imod_align -- it erases from the files on disk without re-running
+    # RAPTOR, then re-run imod_reconstruct.
+    enabled: true
+    find_untracked: true   # also erase beads RAPTOR didn't track (imodfindbeads); false = RAPTOR's beads only
+    better_radius_px: null # erase radius (px); null = round(0.75 * gold diameter px) -- covers core + Fresnel fringe
+  raptor:
+    markers_per_image: null  # null = let RAPTOR auto-estimate (recommended to start)
+    xray: false            # RAPTOR's own -xray: strip strong line features before marker detection
+  reconstruction:
+    fake_sirt_iterations: "10"  # omit/0 to skip this extra reconstruction variant entirely
+  filtered_reconstruction:
+    enabled: false          # mtffilter low/high-pass contrast filter + a second reconstruction
+    low_pass: [0.2, 0.05]   # [radius, sigma], fraction of Nyquist
+    high_pass: 0.0
+  # align_frames:           # pass-through for any extra alignframes flag (input_mode: eer only)
+  #   dtype: 4              # e.g. dose-weighting from the .mdoc (-dtype 4 -dfile <mdoc>)
 
 # ---------------------------------------------------------------------------
 # Stage 1b (optional): generate a RELION5-compatible tomograms.star (+ one
@@ -253,11 +253,11 @@ aretomo:
 # .mdoc file's own [ZValue] sections instead, which ARE in true
 # acquisition order and each carry their own ExposureDose.
 # ---------------------------------------------------------------------------
-# relion5_star:
-#   out_dir: /path/to/relion5_star_output
-#   # mdoc_dir:               # defaults to aretomo.in_prefix (aretomo3) or aretomo2.in_dir/imod.in_dir (aretomo2/imod_raptor)
-#   # optics_group_name: opticsGroup1
-#   defocus_handedness: 1    # aretomo2/imod_raptor only -- no per-dataset measurement available; RELION5 itself defaults this to 1 when unknown
+relion5_star:
+  out_dir: "/mnt/cryonas02/Users/Gabriel_Frank/Ariel_Cohen/test_ferr/Pipeline/relion"
+  # mdoc_dir:               # defaults to aretomo.in_prefix (aretomo3) or aretomo2.in_dir/imod.in_dir (aretomo2/imod_raptor)
+  # optics_group_name: opticsGroup1
+  defocus_handedness: 1    # aretomo2/imod_raptor only -- no per-dataset measurement available; RELION5 itself defaults this to 1 when unknown
 
 # ---------------------------------------------------------------------------
 # Stage 2: organize. With engine: aretomo3 (default), symlinks AreTomo3's
@@ -272,7 +272,7 @@ aretomo:
 # aretomo2.out_bin or imod.pixel_size_angstrom * imod.bin_factor.
 # ---------------------------------------------------------------------------
 organize:
-  out_dir: /mnt/cryonas02/Users/Gabriel_Frank/Ariel_Cohen/test_ferr/isonet2_input
+  out_dir: "/mnt/cryonas02/Users/Gabriel_Frank/Ariel_Cohen/test_ferr/Pipeline/organize"
   # pixel_size: 12.08                 # set directly, OR derive from:
   raw_pixel_size: 1.51                # aretomo.pix_size
   bin_factor: 8                       # aretomo.at_bin[0] (the primary bin)
@@ -297,7 +297,7 @@ organize:
 isonet:
   prepare_star:
     star_name: tomograms.star
-    voltage: 300
+    voltage: 200
     ac: 0.1
     # tilt_min/tilt_max: with engine: aretomo3 these are only a fallback.
     # Each tomogram's star row gets the range AreTomo3 actually
@@ -331,8 +331,8 @@ isonet:
     snrfalloff: 1.0
     highpassnyquist: 0.02
     phaseflipped: false
-    ncpus: 4
-    output_dir: deconv
+    ncpus: 16
+    output_dir: "/mnt/cryonas02/Users/Gabriel_Frank/Ariel_Cohen/test_ferr/Pipeline/isonet"
 
   make_mask:
     # The mask only decides where refine centres its training cubes;
@@ -344,7 +344,7 @@ isonet:
     std_percentage: 50
     patch_size: 4
     z_crop: 0.2
-    output_dir: mask
+    output_dir: "/mnt/cryonas02/Users/Gabriel_Frank/Ariel_Cohen/test_ferr/Pipeline/mask"
 
   refine:
     # top_ctf_n (optional, run_pipeline.py-only key -- not an isonet.py flag):
@@ -364,7 +364,7 @@ isonet:
     # of the star file (<star_name>_top_ctf.star, same directory)
     # containing only the selected rows, and points refine at that instead.
     # Leave unset/0 to train on every tomogram in the star file.
-    # top_ctf_n: 10
+    top_ctf_n: 5
     #
     # train_tomos (optional, run_pipeline.py-only key): train on these
     # tomograms instead -- e.g. ones that show the structures the model has
@@ -394,7 +394,7 @@ isonet:
     gpuID: "0,1,2,3"
     ncpus: 16
     save_interval: 10
-    output_dir: isonet_maps
+    output_dir: "/mnt/cryonas02/Users/Gabriel_Frank/Ariel_Cohen/test_ferr/Pipeline/refine"
     # pretrained_model: /path/to/model.pt   # to continue training
 
   predict:
@@ -404,7 +404,7 @@ isonet:
     isCTFflipped: false
     padding_factor: 1.5
     gpuID: "0,1,2,3"
-    output_dir: corrected_tomos
+    output_dir: "/mnt/cryonas02/Users/Gabriel_Frank/Ariel_Cohen/test_ferr/Pipeline/Isonet_tomo"
 
 # ---------------------------------------------------------------------------
 # Stage 8 (optional): template matching via PyTom's pytom-match-pick
@@ -459,55 +459,57 @@ isonet:
 # at the real tomograms.star so it can remap rlnTomoName to the clean
 # name (longest substring match) before merging.
 # ---------------------------------------------------------------------------
-# pytom:
-#   bin_dir: /path/to/pytom_env/bin   # ./pipeline new fills in this machine's
-#   relion5_tomograms_star: /path/to/Relion_files/tomograms.star   # see GOTCHA above -- omit to skip the rlnTomoName remap
-#   reference_map: /path/to/reference.mrc
-#   reference_map_voxel_size_angstrom: 0.305   # the reference map's OWN native pixel size -- see GOTCHA above
-#   particle_diameter_angstrom: 150     # in Angstrom, along the longest axis for non-globular particles
-#   voxel_size_angstrom: 6.04           # must match isonet.predict's REAL output pixel size -- see GOTCHA above
-#   # tomogram_dir:                     # defaults to isonet.predict.output_dir above (organize's tomograms with skip_denoise)
-#   out_dir: /path/to/template_matching
-#   gpu: [0, 1, 2, 3]
-#   # center: true                     # center the reference's density by center of mass (default true)
-#
-#   create_template:
-#     invert: true                     # flip density sign -- see GOTCHA above; check visually whether your dataset needs this
-#
-#   create_mask:
-#     sigma: 1.0                       # gaussian drop-off at mask edges, in pixels
-#
-# GOTCHA (investigated and REJECTED 2026-10-24, imod_raptor + gold
-# fiducial data): if picks look like they're landing on leftover gold
-# after imod.erase_gold, don't assume it without checking -- a
-# findbeads3d-based exclusion mask was built and tested here, but a
-# proper random-baseline statistical check (real pick positions vs.
-# uniform-random points, both measured against candidate gold sites)
-# showed real picks land near gold candidates NO more often than chance
-# (z-scores ~0-2 across several radii). The earlier "X% of picks near
-# gold" read, done without that baseline, was a base-rate artifact of
-# how much area that many candidate disks simply cover. Gold erasure
-# itself WAS confirmed measurably incomplete at real bead sites (root
-# cause: beads project as ellipses at high tilt angles -- e.g. 2x
-# elongation at +/-60 deg -- so a fixed circular erasure radius can't
-# fully cover them), but since it didn't bias picks, it was left as a
-# cosmetic limitation. Before building a gold exclusion mask for a new
-# dataset, run that random-baseline check first -- don't eyeball it.
-#
-#   match_template:
-#     tilt_angles: [-60, 60]           # or a .tlt/.rawtlt file path instead of [min, max]
-#     # low_pass: 20                   # resolution in A, if the template was pre-filtered to one
-#     # random-phase-correction: true  # STOPGAP-style noise subtraction -- roughly doubles compute time
-#
-#   extract_candidates:
-#     number_of_particles: 500
-#     # cut_off: 0.5                  # override automatic cutoff estimation
-#     # "relion5-compat": true        # write centered coordinates in Angstrom for RELION5 (real pytom flag, verified)
-#   # merged_star_name: particles.star
-#
-#   # tm_figure stage: one PNG with every tomogram's central XY slice and
-#   # its picks overlaid (solid = within z_slab_px of that slice, faint =
-#   # elsewhere in Z), written to out_dir/out_name
-#   figure:
-#     out_name: picks_overview.png
-#     z_slab_px: 20
+pytom:
+  bin_dir: /path/to/pytom_env/bin   # ./pipeline new fills in this machine's
+  relion5_tomograms_star: "/mnt/cryonas02/Users/Gabriel_Frank/Ariel_Cohen/test_ferr/Pipeline/relion/tomograms.star"
+  reference_map: "/mnt/cryonas02/Users/Gabriel_Frank/Ariel_Cohen/test_ferr/Ferritin_0.305px.mrc"
+  reference_map_voxel_size_angstrom: 0.305   # the reference map's OWN native pixel size (see GOTCHA above) -- input to create_template's downsampling, distinct from voxel_size_angstrom below
+  particle_diameter_angstrom: 150
+  voxel_size_angstrom: 12.08   # the REAL pixel size of isonet.predict's output tomograms (see GOTCHA above) -- engine aretomo3: aretomo.pix_size * at_bin = 1.51 * 8, matching relion/tomograms.star (9.12 was imod.pixel_size_angstrom * imod.bin_factor, the IMOD ferritin data)
+  # tomogram_dir:             # defaults to isonet.predict.output_dir above
+  out_dir: "/mnt/cryonas02/Users/Gabriel_Frank/Ariel_Cohen/test_ferr/Pipeline/pytom"
+  gpu: [0, 1, 2, 3]
+  # center: true              # center the reference's density by center of mass (default true)
+
+  create_template:
+    invert: true              # flip density sign -- WBP reconstructions here have ferritin's iron core on the opposite contrast convention from the reference map
+
+  create_mask:
+    sigma: 1.0                # gaussian drop-off at mask edges, in pixels
+
+  # GOTCHA (investigated and REJECTED 2026-10-24): leftover gold
+  # contrast after imod.erase_gold looked like it might be contaminating
+  # picks, so a findbeads3d-based exclusion mask (--tomogram-mask) was
+  # built and tested -- but a proper random-baseline statistical check
+  # showed real picks land near gold candidate sites NO more often than
+  # chance (z-scores ~0-2 across radii 10-30px on Position_1_3), so the
+  # earlier "~47% of picks near gold" read was a base-rate artifact of
+  # how much area that many candidate disks cover, not a real signal.
+  # Deploying the mask would have excluded ~45% of the tomogram for no
+  # benefit. Erasure itself IS measurably incomplete (confirmed at real
+  # RAPTOR-tracked bead sites, root cause: beads project as ellipses at
+  # high tilt angles -- e.g. 2x elongation at +/-60 deg -- so a fixed
+  # circular erasure radius can't fully cover them), but since it
+  # doesn't appear to bias picks, this was left as a known cosmetic
+  # limitation rather than fixed. Don't re-add a gold exclusion mask
+  # without re-running that random-baseline check on the actual dataset
+  # at hand first.
+  match_template:
+    tilt_angles: [-60, 60]    # or a .tlt/.rawtlt file path instead of [min, max]
+    volume-split: [2, 2, 1]  # REQUIRED when using >1 GPU: pytom_match_template.py splits the tomogram into x*y*z pieces, one per GPU -- must equal len(pytom.gpu) (here 2*2*1=4, matching gpu: [0,1,2,3]). Without this it defaults to 1 piece and errors with "Can't evenly distribute 1 tomogram pieces over N GPUs".
+    low-pass: 30              # CRITICAL for speed: without this, pytom_match_template.py computes the angular search step from the Crowther criterion using max resolution = 2*pixel_size (here 1.78 A) -- atomic-resolution-grade sampling (confirmed from a real run: 0.51 deg increment), wildly impractical for a tomogram where real achievable resolution is ~20-40 A. Setting low-pass to a realistic resolution coarsens the angular step by the same factor, which is the dominant speed lever (orientation count scales roughly as 1/angle^3). Adjust to your dataset's actual expected resolution.
+    half-precision: true     # float16 instead of float32 -- further speedup, lower GPU memory
+    # random-phase-correction: true   # STOPGAP-style noise subtraction -- roughly doubles compute time
+
+  extract_candidates:
+    number_of_particles: 500
+    "cut-off": 0.7            # override automatic cutoff estimation (~0.51-0.52) -- chosen after comparing overlay visualizations at auto/0.6/0.7: 0.7 gives the most even particle count across tomograms (35-96 range) with no 500-cap saturation or edge-cluster artifacts (see visualize_picks.py, Template_matching/picks_overview_cutoff_*.png). Must be quoted+hyphenated like this, not cut_off -- _extra_args() does a literal --{key} substitution and the real pytom_extract_candidates.py flag is --cut-off (confirmed via its own --help; same reason "relion5-compat" below is spelled this way)
+    "relion5-compat": true    # write centered coordinates in Angstrom for RELION5 (real pytom flag, verified)
+  merged_star_name: particles.star
+
+  # tm_figure stage: one PNG with every tomogram's central XY slice and
+  # its picks overlaid (solid = within z_slab_px of that slice, faint =
+  # elsewhere in Z), written to out_dir/out_name
+  figure:
+    out_name: "picks_overview.png"
+    z_slab_px: 20
