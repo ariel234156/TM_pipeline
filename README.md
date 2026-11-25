@@ -37,9 +37,6 @@ cd TM_pipeline
 ./install.sh             # asks where to install, then installs what's missing
 ```
 
-On the lab machines, cloning the NAS copy is faster than GitHub:
-`git clone /mnt/cryonas02/Users/Gabriel_Frank/Ariel_Cohen/aretomo3-isonet2-pipeline.git TM_pipeline`.
-
 `install.sh` checks each piece of software the pipeline runs and installs
 only what's missing, all into one folder, without root. It asks which
 folder (Tab completes paths; Enter takes the default, `~/cryoet_software`),
