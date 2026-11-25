@@ -1,0 +1,182 @@
+CRYO-ET PIPELINE - INSTRUCTIONS
+===============================
+The short version is readme.txt; this file explains each step.
+Technical details: README.md, and the comment next to each setting in the
+config files. Questions: Ariel Cohen (coari).
+
+   1. What the pipeline does
+   2. Installing
+   3. Making a config for a new data set
+   4. What to change in the config
+   5. Checking it: the dry run
+   6. Running
+   7. Results
+   8. Working next to other users
+   9. Common problems
+
+
+1. WHAT THE PIPELINE DOES
+-------------------------
+One config file drives the whole chain:
+   alignment + tomograms    AreTomo3 (default), IMOD/RAPTOR or AreTomo2
+   -> IsoNet2               missing-wedge correction and denoising
+   -> PyTom (optional)      template matching -> particles.star
+
+The config's "engine:" setting chooses the alignment:
+   aretomo3      raw frames + .mdoc files (the usual case)
+   imod_raptor   needs gold fiducials; uses the imod: section
+   aretomo2      ready-made tilt-series stacks; uses the aretomo2: section
+                 (set its tilt_range -- it doesn't read the angles itself)
+
+The stages, in order (names for partial runs, part 6):
+   aretomo, imod_align, imod_reconstruct, relion5_star, organize,
+   prepare_star, deconv, make_mask, refine, predict,
+   tm_template, tm_mask, tm_match, tm_extract, tm_merge, tm_figure
+
+
+2. INSTALLING
+-------------
+On moritz
+   Everything is installed already. Don't run install.sh or conda; use the
+   shared folder and go on to part 3:
+     cd /mnt/cryonas02/Users/Gabriel_Frank/Ariel_Cohen/aretomo3-isonet2-pipeline
+
+On another computer
+   It needs (ask an administrator if one is missing): an NVIDIA GPU and its
+   driver, git, make, curl, and -- to build AreTomo -- a CUDA toolkit and
+   g++. Everything else install.sh installs itself, without root.
+
+      git clone https://github.com/ariel234156/TM_pipeline.git
+      cd TM_pipeline
+      ./install.sh --check      lists what's there and what's missing
+      ./install.sh              installs what's missing
+
+   install.sh asks two questions:
+      Install folder [~/cryoet_software]:   Enter, or type a folder
+                                            (Tab completes, ~/ works)
+      Install them into ...? [y/N]          y
+
+   A full install needs about 20 GB and 20 minutes on a fast network.
+   Software that is already on the computer and works is used, not
+   installed again. Running install.sh again is always safe.
+
+   If a part FAILED: its log is <install folder>/logs/<part>.log. Fix the
+   cause and run ./install.sh again. If a file can't be downloaded at all
+   (IMOD's only server, bio3d.colorado.edu, is sometimes down), get it
+   another way -- e.g. from a colleague -- put it in
+   <install folder>/downloads/ and run ./install.sh again.
+
+   Options: --prefix DIR (install there, no question), --yes (no
+   questions), --only imod,pytom, --skip aretomo2. See ./install.sh --help.
+
+
+3. MAKING A CONFIG FOR A NEW DATA SET
+-------------------------------------
+Each data set gets its own numbered config in configs/:
+   ./pipeline new MyData --from 3   on moritz: copy config 3 (ferritin,
+                                    tested end to end)
+   ./pipeline new MyData            copy the example config
+   ./pipeline new MyData --from 5   copy config 5 (e.g. a colleague's)
+It prints your number (e.g. 007) and fills in this computer's software
+paths: aretomo_bin, isonet_bin, imod.bin_dir, pytom.bin_dir. Leave those.
+
+   ./pipeline list                  every config: number, owner, engine,
+                                    raw data, who is running it now
+
+Edit your config in any text editor:
+   nano configs/007_MyData.yaml
+or in a web form:
+   ./pipeline edit 7
+   It prints a link (http://localhost:8765/?token=...) to open in your
+   browser. In VSCode Remote the port is forwarded for you; with plain ssh,
+   log in with  ssh -L 8765:localhost:8765 you@moritz  (use the port number
+   from the link).
+
+
+4. WHAT TO CHANGE IN THE CONFIG
+-------------------------------
+   Data         aretomo.in_prefix (the folder with frames + .mdoc files),
+                aretomo.gain, aretomo.defect_file
+   Outputs      change EVERY *dir and *output_dir to a folder of yours --
+                otherwise you write over the data set you copied from.
+                And: pytom.relion5_tomograms_star =
+                     <relion5_star.out_dir>/tomograms.star
+   Microscope   aretomo.pix_size, kv, cs and tilt_axis for your session
+                (tilt_axis 179.2 is only right for the ferritin data).
+                These must be equal:
+                   aretomo.pix_size    = organize.raw_pixel_size
+                   aretomo.at_bin[0]   = organize.bin_factor
+                   aretomo.kv          = isonet.prepare_star.voltage
+   GPUs         run nvidia-smi and pick free ones for aretomo.gpu,
+                isonet.refine.gpuID, isonet.predict.gpuID and pytom.gpu.
+                The GPUs are shared: don't take ones someone is using.
+   PyTom        reference_map, reference_map_voxel_size_angstrom (the map's
+                own pixel size), particle_diameter_angstrom, and
+                voxel_size_angstrom = pix_size x at_bin (1.51 x 8 = 12.08).
+                No template matching: delete the pytom: section.
+   Other        engine: imod_raptor uses the imod: section instead of
+   engines      aretomo: (in_dir, gain, out_dir, voltage, bin_factor);
+                engine: aretomo2 uses the aretomo2: section.
+
+
+5. CHECKING IT: THE DRY RUN
+---------------------------
+   ./pipeline run 7 --dry-run
+It prints every command it would run, runs nothing and writes nothing.
+It must end with "Pipeline finished." If it stops with an error, the
+message says which setting is wrong; fix it and run the dry run again.
+
+
+6. RUNNING
+----------
+Run it inside tmux, so it keeps going after you log out:
+   tmux new -s mydata
+   ./pipeline run 7
+   leave it running: Ctrl-b, then d       come back: tmux attach -t mydata
+
+Only part of it:
+   ./pipeline run 7 --stop-after aretomo       alignment only
+   ./pipeline run 7 --start-from relion5_star  continue after alignment
+   ./pipeline run 7 --start-from tm_template   template matching only
+   ./pipeline run 7 --skip-denoise             no IsoNet2: PyTom runs on
+                                               the plain tomograms
+
+A config runs once at a time: a second "./pipeline run 7" stops with
+"already running". To run the same data twice, copy the config
+(./pipeline new MyData2 --from 7) and give the copy its own output folders.
+
+
+7. RESULTS
+----------
+   aretomo.out_dir             aligned tilt series and tomograms
+                               (imod.out_dir / aretomo2.out_dir with the
+                               other engines)
+   relion5_star.out_dir        tomograms.star for RELION 5
+   isonet.predict.output_dir   IsoNet2-corrected tomograms
+   pytom.out_dir               particles.star, picks_overview.png
+   log_dir                     pipeline_params_<date>_<time>.txt: the exact
+                               config each run used
+
+
+8. WORKING NEXT TO OTHER USERS
+------------------------------
+- Anyone can add a config to configs/, but only its owner can change or
+  delete it. Someone else's config opens read-only in ./pipeline edit;
+  copy it with ./pipeline new <name> --from N to use it.
+- A run writes where its config says. Check the output folders are yours.
+- Check nvidia-smi before choosing GPUs.
+
+
+9. COMMON PROBLEMS
+------------------
+   "already running"         someone is running that config; use your own
+   "Permission denied"       an output folder belongs to someone else:
+                             change it to one of yours
+   "Permission denied" on    your copy of the pipeline is older than
+   /tmp/cryoet-pipeline-...  2026-11-25: run git pull
+   voxel size mismatch       set pytom.voxel_size_angstrom to the value
+                             in the message
+   /mnt/cryonas101           not mounted on moritz
+   IMOD crash, short .xf     imod.bin_dir must be IMOD 5.1.13 or newer
+                             (/usr/local/IMOD on moritz is 5.1.2)
+   install.sh: a part FAILED see part 2, "If a part FAILED"

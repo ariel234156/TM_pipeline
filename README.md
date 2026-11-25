@@ -6,6 +6,10 @@ matching), driven by one YAML config. `run_pipeline.py` only decides what
 order stages run in and wires each stage's output into the next stage's
 input — every parameter lives in the config, not in code.
 
+For users: `readme.txt` is the quick start (install, start a new data set),
+`instructions.txt` explains every step. This README is the technical
+reference.
+
 Pipeline stages: `aretomo` → `imod_align` → `imod_reconstruct` →
 `relion5_star` → `organize` → `prepare_star` → `deconv` → `make_mask` →
 `refine` → `predict` → `tm_template` → `tm_mask` → `tm_match` →
