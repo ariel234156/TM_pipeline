@@ -70,16 +70,30 @@ def resolve(ref: str) -> Path:
 def _open_lock(path: Path, create: bool = True):
     """A lock file in /tmp that every user can lock: a run by one user has
     to lock a file another user created. None if create is False and the
-    file doesn't exist."""
-    try:
-        fd = os.open(path, os.O_RDWR | os.O_CREAT if create else os.O_RDONLY, 0o666)
-    except FileNotFoundError:
-        return None
-    try:
+    file doesn't exist (or can't be read).
+
+    An existing file is opened without O_CREAT: /tmp is world-writable and
+    sticky, and with fs.protected_regular (on by default in Ubuntu) the
+    kernel refuses O_CREAT on a file there that another user owns, even one
+    everyone may write -- every user but the lock file's owner got
+    "Permission denied: '/tmp/cryoet-pipeline-new.lock'" (2026-11-25)."""
+    while True:
+        try:
+            return os.open(path, os.O_RDWR if create else os.O_RDONLY)
+        except FileNotFoundError:
+            if not create:
+                return None
+        except PermissionError:
+            if not create:
+                return None  # only `list` asks; it shows the config as not running
+            sys.exit(f"can't open the lock file {path} (owned by {path.owner()}, mode "
+                     f"{path.stat().st_mode & 0o777:o}) -- ask {path.owner()} to run: chmod 666 {path}")
+        try:
+            fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_EXCL, 0o666)
+        except FileExistsError:
+            continue  # another user made it just now: open theirs
         os.fchmod(fd, 0o666)  # the umask may have dropped group/other write
-    except PermissionError:
-        pass  # someone else's file: they already did this
-    return fd
+        return fd
 
 
 def _lock_path(config: Path) -> Path:
